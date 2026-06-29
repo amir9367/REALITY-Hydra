@@ -64,8 +64,8 @@ impl Default for RustlsInspector {
 
 impl TlsInspector for RustlsInspector {
     async fn inspect(&self, dest: &str, sni: &str) -> Result<TlsObservation, HealthError> {
-        let server_name = ServerName::try_from(sni.to_string())
-            .map_err(|e| self.probe_err(dest, sni, e))?;
+        let server_name =
+            ServerName::try_from(sni.to_string()).map_err(|e| self.probe_err(dest, sni, e))?;
 
         let start = Instant::now();
 

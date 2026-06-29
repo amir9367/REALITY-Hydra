@@ -34,12 +34,12 @@ impl CoherenceAllowlist {
         let mut nets = Vec::new();
         for cidr in cidrs {
             let cidr = cidr.as_ref();
-            let net: IpNet = cidr.parse().map_err(|e: ipnet::AddrParseError| {
-                HealthError::BadCidr {
-                    cidr: cidr.to_string(),
-                    message: e.to_string(),
-                }
-            })?;
+            let net: IpNet =
+                cidr.parse()
+                    .map_err(|e: ipnet::AddrParseError| HealthError::BadCidr {
+                        cidr: cidr.to_string(),
+                        message: e.to_string(),
+                    })?;
             nets.push(net);
         }
         if nets.is_empty() {

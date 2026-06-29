@@ -194,7 +194,10 @@ async fn resolver_failure_is_an_error_not_a_verdict() {
     let res = checker(resolver, inspector)
         .check(&PoolEntry::new("a.cdn.example", 1.0))
         .await;
-    assert!(matches!(res, Err(health_checker::HealthError::Resolve { .. })));
+    assert!(matches!(
+        res,
+        Err(health_checker::HealthError::Resolve { .. })
+    ));
 }
 
 #[tokio::test]
