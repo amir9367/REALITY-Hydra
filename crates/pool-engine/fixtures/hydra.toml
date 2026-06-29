@@ -1,0 +1,37 @@
+# Sample Hydra config (Phase 1 fields), used by the config-loading tests.
+# Mirrors REALITY.md §11. The keys below are RANDOM TEST VALUES — never reuse.
+master_secret = "base64:Mdzc9T8bRDckIYNV8C256E+OsuYfBiEca20zKwWhgo8="  # 32 bytes
+server_salt   = "base64:gLx8cgG8iAnZTZMiplCwEg=="                      # 16 bytes
+pool_format   = "hydra-pool-v1"
+epoch_len     = "6h"
+active_k      = 4
+
+# Network-layer fields — unused in Phase 1, validated/used by later phases.
+dest            = "cdn-edge.example:443"
+coherence_cidrs = ["104.16.0.0/13"]
+
+# All entries must be real domains on the SAME CDN as `dest` (these are fakes).
+[[pool]]
+sni = "assets.cdn.example"
+weight = 8.0
+[[pool]]
+sni = "img.cdn.example"
+weight = 6.5
+[[pool]]
+sni = "static.cdn.example"
+weight = 5.0
+[[pool]]
+sni = "media.cdn.example"
+weight = 4.0
+[[pool]]
+sni = "api.cdn.example"
+weight = 3.0
+[[pool]]
+sni = "cdn1.cdn.example"
+weight = 2.0
+[[pool]]
+sni = "cdn2.cdn.example"
+weight = 1.5
+[[pool]]
+sni = "edge.cdn.example"
+weight = 1.0

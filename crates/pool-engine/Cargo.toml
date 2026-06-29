@@ -1,0 +1,33 @@
+[package]
+name = "pool-engine"
+description = "REALITY-Hydra Phase 1: the keyed, time-evolving SNI pool engine (pure logic, no network)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Keyed seed derivation: HMAC-SHA256(master_secret, tag || salt || epoch).
+hmac.workspace = true
+sha2.workspace = true
+# Deterministic CSPRNG: a ChaCha20 RNG seeded from the HMAC output drives the
+# weighted sampler so both client and server derive the identical epoch pool.
+rand.workspace = true
+rand_chacha.workspace = true
+# Config + master-list (de)serialization.
+serde.workspace = true
+toml.workspace = true
+base64.workspace = true
+# Keep the long-lived master secret off Debug output and zeroized on drop.
+secrecy.workspace = true
+zeroize.workspace = true
+# Ergonomic error enum.
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "pool"
+harness = false

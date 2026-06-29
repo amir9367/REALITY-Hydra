@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  test:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Clippy (all targets, warnings denied)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test (default features, offline)
+        run: cargo test --workspace
+
+  features:
+    name: live feature paths compile + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      # These pull in real DNS/TLS deps; tests that touch the network are
+      # `#[ignore]`d, so this exercises the build + offline-safe tests only.
+      - name: dns-warmer (live-dns)
+        run: cargo test -p dns-warmer --features live-dns
+
+      - name: health-checker (live-tls)
+        run: cargo test -p health-checker --features live-tls

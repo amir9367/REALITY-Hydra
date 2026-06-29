@@ -1,0 +1,41 @@
+[package]
+name = "health-checker"
+description = "REALITY-Hydra Phase 2: validate pool SNIs for coherence (DNS in CDN range), valid cert + SAN match, ALPN h2, and latency — then prune the active pool (defeats Traps 2 & 3, P1/P8)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The pool types we validate and prune.
+pool-engine = { path = "../pool-engine" }
+# Reuse the Resolver seam + Resolved record for axis (a); no duplicate DNS code.
+dns-warmer = { path = "../dns-warmer" }
+# CIDR membership for the coherence allowlist (Traps 2 & 3).
+ipnet.workspace = true
+thiserror.workspace = true
+
+# --- live-tls: the real validation probe (off by default) ---
+# This is validation-only TLS (a plain rustls client just to read the cert/ALPN),
+# NOT the camouflaged client — that is reality-tls (REALITY.md §7 P7). Gated so
+# the default build and all offline tests need no TLS provider/toolchain.
+tokio = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+rustls-pki-types = { workspace = true, optional = true }
+webpki-roots = { workspace = true, optional = true }
+x509-parser = { workspace = true, optional = true }
+
+[features]
+live-tls = [
+    "dep:tokio",
+    "dep:tokio-rustls",
+    "dep:rustls",
+    "dep:rustls-pki-types",
+    "dep:webpki-roots",
+    "dep:x509-parser",
+    "dns-warmer/live-dns",
+]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

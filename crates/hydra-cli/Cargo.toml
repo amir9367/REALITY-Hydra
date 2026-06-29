@@ -1,0 +1,26 @@
+[package]
+name = "hydra-cli"
+description = "REALITY-Hydra Phase 6: server-side epoch automation. Loads hydra.toml, derives the current epoch's accepted serverNames (the ±1 union), and renders them as lines, JSON, or a paste-ready stock Xray REALITY inbound (REALITY.md §11)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Two targets: a thin `hydra` binary and the library it is a shell over, so the
+# whole rendering/derivation surface is unit-testable without spawning a process.
+[lib]
+name = "hydra_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hydra"
+path = "src/main.rs"
+
+[dependencies]
+# The keyed epoch pool: this crate is pure glue over it.
+pool-engine = { path = "../pool-engine" }
+# CLI parsing for the `hydra` binary.
+clap = { workspace = true }
+# JSON output (a serverNames array and the Xray inbound snippet).
+serde_json = { workspace = true }
+thiserror.workspace = true

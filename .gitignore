@@ -1,0 +1,25 @@
+# Rust build artifacts (this directory is ~2 GB; never commit it).
+/target/
+**/*.rs.bk
+
+# Criterion benchmark output.
+/criterion/
+
+# graphify knowledge-graph scratch/output (local tooling, not project source).
+/graphify-out/
+
+# Local environment / secrets. The committed fixtures use clearly-marked TEST
+# values; never commit a real master_secret or server_salt.
+*.env
+.env
+hydra.local.toml
+
+# Editor / IDE.
+/.vscode/
+/.idea/
+*.swp
+*~
+
+# OS cruft.
+.DS_Store
+Thumbs.db

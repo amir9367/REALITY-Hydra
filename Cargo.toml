@@ -1,0 +1,60 @@
+# REALITY-Hydra workspace.
+#
+# A workspace groups several related crates under one lockfile and one `target/`
+# directory. Phase 1 ships a single member, `pool-engine` (the pure-logic core).
+# Later phases from REALITY.md (health-checker, dns-warmer, reality-tls, a server
+# sidecar, a CLI) will be added as sibling crates under `crates/`.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+# Settings shared by every crate in the workspace. Members opt in per field with
+# `field.workspace = true` in their own Cargo.toml (see crates/pool-engine).
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+rust-version = "1.88"
+
+# Dependency versions are declared once here and referenced from each crate with
+# `dep.workspace = true`. This keeps versions consistent across the workspace.
+[workspace.dependencies]
+# --- Phase 1 (pool-engine) ---
+hmac = "0.13"
+sha2 = "0.11"
+rand = "0.10"
+rand_chacha = "0.10"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+base64 = "0.22"
+secrecy = "0.10"
+zeroize = "1"
+thiserror = "2"
+proptest = "1.11"
+criterion = "0.8"
+
+# --- Phases 2/3/6 (health-checker, dns-warmer, cli) ---
+# Async runtime for the network-touching crates.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+# Real DNS resolution (Phase 3, behind the `live-dns` feature).
+hickory-resolver = "0.26"
+# TLS 1.3 probe for the health-checker (Phase 2, behind `live-tls`). This is
+# validation-only TLS — NOT the camouflaged client (that is reality-tls, §7 P7).
+# `ring` is chosen over `aws-lc-rs` to avoid a cmake/nasm build toolchain on
+# Windows; all of this is feature-gated so the default build needs no provider.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = "1"
+webpki-roots = "1"
+# Extract Subject Alternative Names from the probed leaf cert (P1 SAN match).
+x509-parser = "0.16"
+# CIDR membership for coherence checks (Traps 2 & 3).
+ipnet = "2"
+# CLI argument parsing and JSON output (serverNames / xray-config).
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+
+# --- Phase 4 (reality-tls, scaffold) ---
+# BoringSSL impersonation path — optional, behind `boring-impersonate`, off by
+# default so the scaffold compiles with no native-TLS toolchain (§7 P7).
+boring = "4"

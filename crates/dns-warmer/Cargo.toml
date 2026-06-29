@@ -1,0 +1,22 @@
+[package]
+name = "dns-warmer"
+description = "REALITY-Hydra Phase 3: real resolve-on-first-use DNS warming with a TTL-aware cache (defeats Trap 1)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+# Real resolver — only compiled when the `live-dns` feature is on. The trait and
+# the in-memory MockResolver work without it, so offline tests need no network.
+tokio = { workspace = true, optional = true }
+hickory-resolver = { workspace = true, optional = true }
+
+[features]
+# Enables `HickoryResolver`, a real async resolver. Off by default so the crate
+# (and its offline tests) build with no network stack — see REALITY.md §7 P5.
+live-dns = ["dep:tokio", "dep:hickory-resolver"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

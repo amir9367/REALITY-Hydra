@@ -1,0 +1,12 @@
+# Normalize line endings: store everything as LF in the repo, check out native.
+* text=auto eol=lf
+
+# Explicitly text.
+*.rs    text
+*.toml  text
+*.md    text
+*.yml   text
+*.lock  text
+
+# Treat license files as text but never let tooling mangle them.
+LICENSE-* text
