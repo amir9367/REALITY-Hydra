@@ -156,23 +156,55 @@ NO_CONFIG="${NO_CONFIG:-0}"
 
 check_rust() {
     info "Checking Rust toolchain..."
-    if command -v rustup &>/dev/null; then
-        ok "rustup $(rustup --version 2>/dev/null | head -1)"
-        ok "cargo  $(cargo --version 2>/dev/null | head -1)"
-    elif command -v cargo &>/dev/null; then
-        ok "cargo  $(cargo --version 2>/dev/null | head -1)"
-        warn "rustup not found — managing toolchain upgrades may be manual"
-    else
-        warn "Rust not found. Installing via rustup..."
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+    # Source cargo env if it exists (handles missing PATH entries)
+    if [ -f "$HOME/.cargo/env" ]; then
         # shellcheck disable=SC1091
-        source "$HOME/.cargo/env"
-        ok "installed $(rustc --version)"
+        source "$HOME/.cargo/env" 2>/dev/null || true
     fi
 
+    # Install rustup if missing
+    if ! command -v rustup &>/dev/null; then
+        warn "Rust not found. Installing via rustup..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        if [ -f "$HOME/.cargo/env" ]; then
+            # shellcheck disable=SC1091
+            source "$HOME/.cargo/env"
+        fi
+        if ! command -v rustc &>/dev/null; then
+            die "Rust installation failed"
+        fi
+        ok "installed $(rustc --version)"
+    else
+        ok "rustup $(rustup --version 2>/dev/null | head -1)"
+    fi
+
+    # Verify cargo actually works (not just that the binary exists)
+    local cargo_ver=""
+    if ! cargo_ver="$(cargo --version 2>/dev/null)"; then
+        warn "cargo is broken or missing — repairing toolchain..."
+        rustup default stable 2>/dev/null || rustup toolchain install stable -y
+        if ! cargo_ver="$(cargo --version 2>/dev/null)"; then
+            die "Could not repair Rust toolchain. Run: rustup default stable"
+        fi
+    fi
+    ok "cargo  $cargo_ver"
+
+    # Verify rustc works
+    local rustc_ver=""
+    if ! rustc_ver="$(rustc --version 2>/dev/null)"; then
+        warn "rustc is broken — repairing toolchain..."
+        rustup default stable 2>/dev/null || rustup toolchain install stable -y
+        if ! rustc_ver="$(rustc --version 2>/dev/null)"; then
+            die "Could not repair rustc. Run: rustup default stable"
+        fi
+    fi
+    ok "rustc  $rustc_ver"
+
+    # Version check — require 1.88+
     local needed="1.88.0"
     local current
-    current="$(rustc --version | sed 's/.*\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/')"
+    current="$(echo "$rustc_ver" | sed 's/.*\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/')"
     if [ "$(printf '%s\n%s\n' "$needed" "$current" | sort -V | head -1)" != "$needed" ]; then
         die "Rust $needed+ required, found $current — run: rustup update"
     fi

@@ -187,7 +187,7 @@ check_rust() {
     # Verify cargo actually works (not just that the command exists)
     if ! cargo_version=$(cargo --version 2>/dev/null); then
         warn "cargo is broken or missing — repairing toolchain..."
-        rustup default stable 2>/dev/null || rustup toolchain install stable
+        rustup default stable 2>/dev/null || rustup toolchain install stable -y
         if ! cargo_version=$(cargo --version 2>/dev/null); then
             die "Could not repair Rust toolchain. Run: rustup default stable"
         fi
@@ -197,7 +197,7 @@ check_rust() {
     # Verify rustc works
     if ! rustc_version=$(rustc --version 2>/dev/null); then
         warn "rustc is broken — repairing toolchain..."
-        rustup default stable 2>/dev/null || rustup toolchain install stable
+        rustup default stable 2>/dev/null || rustup toolchain install stable -y
         if ! rustc_version=$(rustc --version 2>/dev/null); then
             die "Could not repair rustc. Run: rustup default stable"
         fi
