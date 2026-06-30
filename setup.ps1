@@ -132,33 +132,60 @@ function Show-Usage {
 function Test-RustToolchain {
     Write-Step "Checking Rust toolchain..."
 
+    # Ensure cargo is in PATH
+    $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+    if (Test-Path $cargoBin) {
+        if ($env:PATH -notlike "*$cargoBin*") {
+            $env:PATH = $cargoBin + ";" + $env:PATH
+        }
+    }
+
     $hasRustup = $null -ne (Get-Command rustup -ErrorAction SilentlyContinue)
     $hasCargo  = $null -ne (Get-Command cargo  -ErrorAction SilentlyContinue)
 
     if ($hasRustup) {
         $rv = (cmd /c "rustup --version 2>nul") -replace "`n.*",""
-        $cv = (cmd /c "cargo --version 2>nul") -replace "`n.*",""
         Write-Ok "rustup $rv"
-        Write-Ok "cargo  $cv"
-    } elseif ($hasCargo) {
-        $cv = (cmd /c "cargo --version 2>nul") -replace "`n.*",""
-        Write-Ok "cargo  $cv"
-        Write-WarnMsg "rustup not found - managing toolchain upgrades may be manual"
     } else {
         Write-WarnMsg "Rust not found. Installing via rustup-init..."
         $installer = Join-Path $env:TEMP "rustup-init.exe"
         Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $installer
         & $installer -y --default-toolchain stable
         Remove-Item $installer -ErrorAction SilentlyContinue
-        # Refresh PATH for this session
-        $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
         $env:PATH = $cargoBin + ";" + $env:PATH
-        $ver = cmd /c "rustc --version 2>nul"
-        Write-Ok "Installed $ver"
+        $hasRustup = $null -ne (Get-Command rustup -ErrorAction SilentlyContinue)
     }
 
+    # Verify cargo actually works (not just that the command exists)
+    $cargoVer = cmd /c "cargo --version 2>nul"
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($cargoVer)) {
+        Write-WarnMsg "cargo is broken or missing - repairing toolchain..."
+        & rustup default stable 2>$null
+        if ($LASTEXITCODE -ne 0) { & rustup toolchain install stable }
+        $cargoVer = cmd /c "cargo --version 2>nul"
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($cargoVer)) {
+            Write-ErrMsg "Could not repair Rust toolchain. Run: rustup default stable"
+            exit 1
+        }
+    }
+    Write-Ok "cargo  $cargoVer"
+
+    # Verify rustc works
+    $rustcVer = cmd /c "rustc --version 2>nul"
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($rustcVer)) {
+        Write-WarnMsg "rustc is broken - repairing toolchain..."
+        & rustup default stable 2>$null
+        if ($LASTEXITCODE -ne 0) { & rustup toolchain install stable }
+        $rustcVer = cmd /c "rustc --version 2>nul"
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($rustcVer)) {
+            Write-ErrMsg "Could not repair rustc. Run: rustup default stable"
+            exit 1
+        }
+    }
+    Write-Ok "rustc  $rustcVer"
+
     # Version check - require 1.88+
-    $current = (cmd /c "rustc --version 2>nul") -replace '.*?(\d+\.\d+\.\d+).*','$1'
+    $current = $rustcVer -replace '.*?(\d+\.\d+\.\d+).*','$1'
     $needed  = "1.88.0"
     if ([version]$current -lt [version]$needed) {
         Write-ErrMsg "Rust $needed+ required, found $current - run: rustup update"
