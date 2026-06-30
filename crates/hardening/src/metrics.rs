@@ -118,11 +118,13 @@ impl Metrics {
 }
 
 /// A snapshot of all counters at a point in time (for logging / comparison).
+#[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub counters: Vec<(&'static str, u64)>,
 }
 
+#[allow(dead_code)]
 impl Snapshot {
     /// Take a snapshot of the given counter set.
     pub fn take(set: &CounterSet) -> Self {

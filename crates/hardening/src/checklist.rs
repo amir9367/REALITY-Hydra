@@ -4,10 +4,7 @@
 //! checklist and returns a [`CheckResult`]. [`run_checklist`] executes every
 //! check and produces a [`ChecklistReport`] with pass/fail per item.
 
-use pool_engine::{
-    Epoch, HydraConfig, MasterList,
-    accepted_pool_window, keyed_epoch_subset,
-};
+use pool_engine::{Epoch, HydraConfig, MasterList, accepted_pool_window, keyed_epoch_subset};
 
 /// The outcome of a single checklist item.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,7 +73,7 @@ pub fn check_epoch_window_saturation(
     k: usize,
 ) -> bool {
     let windowed = accepted_pool_window(master_secret, server_salt, master, 0, k);
-    windowed.len() > 0
+    !windowed.is_empty()
 }
 
 /// Check that k is clamped to the master-list size (§13: "k is clamped").

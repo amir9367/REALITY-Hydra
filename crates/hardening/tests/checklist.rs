@@ -1,8 +1,6 @@
 //! Integration tests for the hardening checklist and distribution validation.
 
-use hardening::{
-    chi_square, distribution_matches_weights, run_checklist, SampleEntry,
-};
+use hardening::{SampleEntry, chi_square, distribution_matches_weights, run_checklist};
 use pool_engine::{HydraConfig, MasterList, PoolEntry};
 use std::collections::HashMap;
 
@@ -39,9 +37,18 @@ fn checklist_report_has_all_items() {
 #[test]
 fn perfectly_proportional_counts_pass() {
     let entries = vec![
-        SampleEntry { label: "a".into(), weight: 5.0 },
-        SampleEntry { label: "b".into(), weight: 3.0 },
-        SampleEntry { label: "c".into(), weight: 2.0 },
+        SampleEntry {
+            label: "a".into(),
+            weight: 5.0,
+        },
+        SampleEntry {
+            label: "b".into(),
+            weight: 3.0,
+        },
+        SampleEntry {
+            label: "c".into(),
+            weight: 2.0,
+        },
     ];
     let mut counts = HashMap::new();
     counts.insert("a".into(), 500);
@@ -53,9 +60,18 @@ fn perfectly_proportional_counts_pass() {
 #[test]
 fn heavily_biased_counts_fail() {
     let entries = vec![
-        SampleEntry { label: "a".into(), weight: 5.0 },
-        SampleEntry { label: "b".into(), weight: 3.0 },
-        SampleEntry { label: "c".into(), weight: 2.0 },
+        SampleEntry {
+            label: "a".into(),
+            weight: 5.0,
+        },
+        SampleEntry {
+            label: "b".into(),
+            weight: 3.0,
+        },
+        SampleEntry {
+            label: "c".into(),
+            weight: 2.0,
+        },
     ];
     let mut counts = HashMap::new();
     counts.insert("a".into(), 50);
@@ -67,8 +83,14 @@ fn heavily_biased_counts_fail() {
 #[test]
 fn chi2_statistic_increases_with_mismatch() {
     let entries = vec![
-        SampleEntry { label: "a".into(), weight: 1.0 },
-        SampleEntry { label: "b".into(), weight: 1.0 },
+        SampleEntry {
+            label: "a".into(),
+            weight: 1.0,
+        },
+        SampleEntry {
+            label: "b".into(),
+            weight: 1.0,
+        },
     ];
 
     // Perfect 50:50 split.

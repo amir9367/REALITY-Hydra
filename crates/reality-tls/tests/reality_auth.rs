@@ -1,9 +1,9 @@
 //! Offline behavioural tests for the REALITY auth and config modules.
 //! No BoringSSL toolchain required — tests the pure-logic modules only.
 
-use reality_tls::{RealityAuth, RealityConfig};
 use reality_tls::fingerprint::Fingerprint;
-use reality_tls::fingerprint::{CHROME_CIPHER_SUITES, CHROME_GROUPS, CHROME_SIG_ALGS, CHROME_ALPN};
+use reality_tls::fingerprint::{CHROME_ALPN, CHROME_CIPHER_SUITES, CHROME_GROUPS, CHROME_SIG_ALGS};
+use reality_tls::{RealityAuth, RealityConfig};
 
 #[test]
 fn config_rejects_short_id_over_32_bytes() {
@@ -93,12 +93,8 @@ fn full_auth_round_trip() {
         Fingerprint::Chrome,
     )
     .unwrap();
-    let auth = RealityAuth::build(
-        &cfg.server_public_key,
-        cfg.pick_short_id(),
-        1_700_000_000,
-    )
-    .unwrap();
+    let auth =
+        RealityAuth::build(&cfg.server_public_key, cfg.pick_short_id(), 1_700_000_000).unwrap();
     // 32 + 8 + 3 + 16 = 59
     assert_eq!(auth.session_id.len(), 59);
     assert!(auth.client_public.iter().any(|&b| b != 0));

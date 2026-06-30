@@ -51,7 +51,10 @@ fn run(cli: &Cli) -> Result<(), ClientError> {
 }
 
 /// Accept SOCKS5 connections on `addr` and hand them to the pipeline.
-async fn serve(addr: &str, pipeline: Pipeline<dns_warmer::MockResolver>) -> Result<(), ClientError> {
+async fn serve(
+    addr: &str,
+    pipeline: Pipeline<dns_warmer::MockResolver>,
+) -> Result<(), ClientError> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| ClientError::Bind {

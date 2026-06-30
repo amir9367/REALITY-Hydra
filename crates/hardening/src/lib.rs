@@ -21,26 +21,23 @@
 //! ## Quick tour
 //!
 //! ```
-//! use hardening::{check_pool_determinism, check_epoch_window};
-//! use pool_engine::{MasterList, PoolEntry};
+//! use hardening::{chi_square, distribution_matches_weights, SampleEntry, Metrics};
+//! use std::collections::HashMap;
 //!
-//! let master = MasterList::new(vec![
-//!     PoolEntry::new("a.cdn.example", 3.0),
-//!     PoolEntry::new("b.cdn.example", 2.0),
-//!     PoolEntry::new("c.cdn.example", 1.0),
-//! ])
-//! .unwrap();
+//! // 1. Distribution validation: check that observed counts match weights.
+//! let weights = vec![
+//!     SampleEntry { label: "a".into(), weight: 3.0 },
+//!     SampleEntry { label: "b".into(), weight: 2.0 },
+//! ];
+//! let mut counts = HashMap::new();
+//! counts.insert("a".into(), 300);
+//! counts.insert("b".into(), 200);
+//! assert!(distribution_matches_weights(&counts, &weights));
 //!
-//! let secret = b"a-32-byte-or-so shared master secret";
-//! let salt = [0u8; pool_engine::SALT_LEN];
-//!
-//! // Check that both "sides" derive the same pool.
-//! let ok = check_pool_determinism(secret, &salt, &master, 42, 2);
-//! assert!(ok);
-//!
-//! // Check that the ±1 window is a superset of the single-epoch pool.
-//! let ok = check_epoch_window(secret, &salt, &master, 42, 2);
-//! assert!(ok);
+//! // 2. Metrics: track counters.
+//! let metrics = Metrics::counter_set();
+//! metrics.inc(Metrics::SELECTIONS);
+//! assert_eq!(metrics.get(Metrics::SELECTIONS), 1);
 //! ```
 
 mod checklist;
@@ -48,5 +45,5 @@ mod distribution;
 mod metrics;
 
 pub use checklist::{CheckResult, ChecklistReport, run_checklist};
-pub use distribution::{chi_square, distribution_matches_weights, SampleEntry};
+pub use distribution::{SampleEntry, chi_square, distribution_matches_weights};
 pub use metrics::{CounterSet, Metrics};

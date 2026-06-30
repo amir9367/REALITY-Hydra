@@ -55,10 +55,16 @@ pub async fn handshake(stream: &mut TcpStream) -> Result<Socks5Addr, String> {
     }
     let nmethods = read_u8(stream).await? as usize;
     let mut methods = vec![0u8; nmethods];
-    stream.read_exact(&mut methods).await.map_err(|e| e.to_string())?;
+    stream
+        .read_exact(&mut methods)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Reply: no auth required.
-    stream.write_all(&[0x05, 0x00]).await.map_err(|e| e.to_string())?;
+    stream
+        .write_all(&[0x05, 0x00])
+        .await
+        .map_err(|e| e.to_string())?;
 
     // --- CONNECT request ---
     let ver = read_u8(stream).await?;
@@ -78,7 +84,10 @@ pub async fn handshake(stream: &mut TcpStream) -> Result<Socks5Addr, String> {
         0x01 => {
             // IPv4
             let mut buf = [0u8; 4];
-            stream.read_exact(&mut buf).await.map_err(|e| e.to_string())?;
+            stream
+                .read_exact(&mut buf)
+                .await
+                .map_err(|e| e.to_string())?;
             let port = read_u16(stream).await?;
             Socks5Addr::IPv4(buf, port)
         }
@@ -86,7 +95,10 @@ pub async fn handshake(stream: &mut TcpStream) -> Result<Socks5Addr, String> {
             // Domain
             let len = read_u8(stream).await? as usize;
             let mut buf = vec![0u8; len];
-            stream.read_exact(&mut buf).await.map_err(|e| e.to_string())?;
+            stream
+                .read_exact(&mut buf)
+                .await
+                .map_err(|e| e.to_string())?;
             let domain = String::from_utf8(buf).map_err(|e| format!("SOCKS5: bad domain: {e}"))?;
             let port = read_u16(stream).await?;
             Socks5Addr::Domain(domain, port)
@@ -94,7 +106,10 @@ pub async fn handshake(stream: &mut TcpStream) -> Result<Socks5Addr, String> {
         0x04 => {
             // IPv6
             let mut buf = [0u8; 16];
-            stream.read_exact(&mut buf).await.map_err(|e| e.to_string())?;
+            stream
+                .read_exact(&mut buf)
+                .await
+                .map_err(|e| e.to_string())?;
             let port = read_u16(stream).await?;
             Socks5Addr::IPv6(buf, port)
         }

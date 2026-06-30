@@ -9,8 +9,6 @@
 //! 4. Empty-pool error handling.
 //! 5. Full connect + relay path (with a local TCP echo server).
 
-use std::time::Duration;
-
 use hydra_client::{Pipeline, Socks5Addr};
 use pool_engine::HydraConfig;
 
@@ -24,8 +22,8 @@ fn test_config() -> HydraConfig {
 async fn pipeline_initializes_with_correct_pool() {
     let cfg = test_config();
     let pipeline = Pipeline::mock(cfg);
-    let pool = pipeline.pool.read().await;
-    // The fixture has 8 entries; active_k=4, so the windowed pool is >= 4.
+    let pool = pipeline.active_pool().await;
+    // The fixture has 20 entries; active_k=6, so the windowed pool is >= 6.
     assert!(pool.len() >= 4);
 }
 
@@ -34,11 +32,11 @@ async fn pipeline_selects_sni_from_pool() {
     let cfg = test_config();
     let pipeline = Pipeline::mock(cfg);
 
-    // Pick an SNI directly from the selector.
-    let pool = pipeline.pool.read().await;
-    let mut sel = pipeline.selector.lock().await;
-    let sni = sel.pick(&pool, "test-dest.example", 0);
+    // Pick an SNI via the public selector API.
+    let sni = pipeline.select_sni("test-dest.example", 0).await;
     assert!(sni.is_some());
+
+    let pool = pipeline.active_pool().await;
     assert!(pool.contains(&sni.unwrap()));
 }
 
@@ -49,9 +47,9 @@ async fn refresh_epoch_is_idempotent_within_same_epoch() {
     let cfg = test_config();
     let pipeline = Pipeline::mock(cfg);
 
-    let pool_before = pipeline.pool.read().await.len();
+    let pool_before = pipeline.active_pool().await.len();
     pipeline.maybe_refresh_epoch().await;
-    let pool_after = pipeline.pool.read().await.len();
+    let pool_after = pipeline.active_pool().await.len();
 
     assert_eq!(pool_before, pool_after);
 }
@@ -73,7 +71,7 @@ async fn socks5_addr_display() {
 // ---- Error paths ------------------------------------------------------------
 
 #[tokio::test]
-async fn handle_connection_on_empty_pool_returns_error() {
+async fn single_entry_pool_has_correct_size() {
     let cfg = HydraConfig::from_toml_str(
         r#"
         master_secret = "base64:Mdzc9T8bRDckIYNV8C256E+OsuYfBiEca20zKwWhgo8="
@@ -89,13 +87,7 @@ async fn handle_connection_on_empty_pool_returns_error() {
     .unwrap();
 
     let pipeline = Pipeline::mock(cfg);
-
-    // Create a TCP socket pair using the built-in tokio listener.
-    // We can't easily test the full SOCKS5 path without a real client,
-    // but we can test that the pipeline handles an empty pool gracefully.
-    //
-    // For now, verify the pool is non-empty (the fixture has 1 entry).
-    let pool = pipeline.pool.read().await;
+    let pool = pipeline.active_pool().await;
     assert_eq!(pool.len(), 1);
 }
 
@@ -104,7 +96,7 @@ async fn handle_connection_on_empty_pool_returns_error() {
 #[tokio::test]
 async fn full_relay_copies_bytes_bidirectionally() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, TcpStream};
 
     // Start a simple echo server.
     let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();

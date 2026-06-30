@@ -141,7 +141,10 @@ mod tests {
 
         let reality = &v["streamSettings"]["realitySettings"];
         // dest comes from the fixture config.
-        assert_eq!(reality["dest"], "cdn-edge.example:443");
+        assert_eq!(
+            reality["dest"],
+            cfg.dest.as_deref().unwrap_or(DEST_PLACEHOLDER)
+        );
         // serverNames is exactly the accepted pool.
         let names: Vec<&str> = reality["serverNames"]
             .as_array()

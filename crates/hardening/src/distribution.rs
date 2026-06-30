@@ -10,6 +10,7 @@
 //!
 //! ```
 //! use hardening::{chi_square, distribution_matches_weights, SampleEntry};
+//! use std::collections::HashMap;
 //!
 //! // Configure 3 SNIs with weights 3:2:1.
 //! let weights = vec![
@@ -18,10 +19,14 @@
 //!     SampleEntry { label: "c".into(), weight: 1.0 },
 //! ];
 //!
-//! // Simulate 6000 selections.
-//! let mut counts = std::collections::HashMap::new();
-//! // In a real test you'd use the pool engine's selector; here we just
-//! // show the API.
+//! // Simulate 6000 selections split exactly 300:200:100.
+//! let mut counts = HashMap::new();
+//! counts.insert("a".into(), 300);
+//! counts.insert("b".into(), 200);
+//! counts.insert("c".into(), 100);
+//!
+//! let (chi_sq, dof) = chi_square(&counts, &weights);
+//! assert!(distribution_matches_weights(&counts, &weights));
 //! ```
 
 use std::collections::HashMap;
@@ -43,12 +48,12 @@ pub struct SampleEntry {
 /// Returns `(chi_sq, degrees_of_freedom)`. A χ² value much larger than the
 /// degrees of freedom indicates the observed distribution does NOT match the
 /// expected distribution.
-pub fn chi_square(
-    counts: &HashMap<String, u64>,
-    entries: &[SampleEntry],
-) -> (f64, usize) {
+pub fn chi_square(counts: &HashMap<String, u64>, entries: &[SampleEntry]) -> (f64, usize) {
     let total_weight: f64 = entries.iter().map(|e| e.weight).sum();
-    let total_obs: u64 = entries.iter().map(|e| counts.get(&e.label).copied().unwrap_or(0)).sum();
+    let total_obs: u64 = entries
+        .iter()
+        .map(|e| counts.get(&e.label).copied().unwrap_or(0))
+        .sum();
 
     if total_obs == 0 || total_weight <= 0.0 {
         return (0.0, 0);
@@ -128,9 +133,18 @@ mod tests {
     fn perfect_distribution_passes_chi2() {
         // 3:2:1 weight, 600 observations split exactly 300:200:100.
         let entries = vec![
-            SampleEntry { label: "a".into(), weight: 3.0 },
-            SampleEntry { label: "b".into(), weight: 2.0 },
-            SampleEntry { label: "c".into(), weight: 1.0 },
+            SampleEntry {
+                label: "a".into(),
+                weight: 3.0,
+            },
+            SampleEntry {
+                label: "b".into(),
+                weight: 2.0,
+            },
+            SampleEntry {
+                label: "c".into(),
+                weight: 1.0,
+            },
         ];
         let mut counts = HashMap::new();
         counts.insert("a".into(), 300);
@@ -147,9 +161,18 @@ mod tests {
     fn skewed_distribution_fails_chi2() {
         // 3:2:1 weight but observed is 100:100:400 (heavily skewed toward "c").
         let entries = vec![
-            SampleEntry { label: "a".into(), weight: 3.0 },
-            SampleEntry { label: "b".into(), weight: 2.0 },
-            SampleEntry { label: "c".into(), weight: 1.0 },
+            SampleEntry {
+                label: "a".into(),
+                weight: 3.0,
+            },
+            SampleEntry {
+                label: "b".into(),
+                weight: 2.0,
+            },
+            SampleEntry {
+                label: "c".into(),
+                weight: 1.0,
+            },
         ];
         let mut counts = HashMap::new();
         counts.insert("a".into(), 100);
@@ -164,7 +187,10 @@ mod tests {
 
     #[test]
     fn single_entry_has_zero_dof() {
-        let entries = vec![SampleEntry { label: "only".into(), weight: 1.0 }];
+        let entries = vec![SampleEntry {
+            label: "only".into(),
+            weight: 1.0,
+        }];
         let mut counts = HashMap::new();
         counts.insert("only".into(), 1000);
 
@@ -177,12 +203,18 @@ mod tests {
     #[test]
     fn empty_counts_gives_zero_chi2() {
         let entries = vec![
-            SampleEntry { label: "a".into(), weight: 1.0 },
-            SampleEntry { label: "b".into(), weight: 1.0 },
+            SampleEntry {
+                label: "a".into(),
+                weight: 1.0,
+            },
+            SampleEntry {
+                label: "b".into(),
+                weight: 1.0,
+            },
         ];
         let counts = HashMap::new();
         let (chi_sq, dof) = chi_square(&counts, &entries);
         assert_eq!(chi_sq, 0.0);
-        assert_eq!(dof, 1);
+        assert_eq!(dof, 0); // no observations → no degrees of freedom
     }
 }

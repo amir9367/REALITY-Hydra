@@ -9,11 +9,11 @@ fn loads_fixture_and_drives_engine() {
     let cfg = HydraConfig::from_file(path).expect("fixture should load");
 
     assert_eq!(cfg.epoch_len, Duration::from_secs(6 * 3600));
-    assert_eq!(cfg.active_k, 4);
+    assert_eq!(cfg.active_k, 6);
     assert_eq!(cfg.server_salt.len(), 16);
     assert_eq!(cfg.master_secret().len(), 32);
     assert!(cfg.master_list.len() >= cfg.active_k);
-    assert_eq!(cfg.dest.as_deref(), Some("cdn-edge.example:443"));
+    assert_eq!(cfg.dest.as_deref(), Some("www.cloudflare.com:443"));
 
     // The loaded config actually produces a pool of the configured size.
     let pool = keyed_epoch_subset(

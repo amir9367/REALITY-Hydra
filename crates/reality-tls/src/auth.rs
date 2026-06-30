@@ -26,6 +26,7 @@ use crate::error::RealityError;
 
 const NONCE_INFO: &[u8] = b"hydra-reality-nonce";
 const NONCE_LEN: usize = 12;
+#[allow(dead_code)]
 const TAG_LEN: usize = 16;
 const PUBKEY_LEN: usize = 32;
 const TIMESTAMP_LEN: usize = 8;
@@ -111,7 +112,7 @@ mod tests {
     fn empty_short_id_is_valid() {
         let server_key = [0xAAu8; 32];
         let auth = RealityAuth::build(&server_key, &[], 12345).unwrap();
-        assert_eq!(auth.session_id.len(), 32 + 8 + 0 + TAG_LEN);
+        assert_eq!(auth.session_id.len(), 32 + 8 + TAG_LEN);
     }
 
     #[test]

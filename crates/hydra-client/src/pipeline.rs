@@ -16,9 +16,7 @@
 use std::sync::Arc;
 
 use dns_warmer::{DnsWarmer, MockResolver, Resolver, WarmerConfig};
-use pool_engine::{
-    ActivePool, Epoch, HydraConfig, Selector, accepted_pool_window, current_epoch,
-};
+use pool_engine::{ActivePool, Epoch, HydraConfig, Selector, accepted_pool_window, current_epoch};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::sync::watch;
@@ -49,11 +47,7 @@ impl Pipeline<MockResolver> {
 
 impl<R: Resolver> Pipeline<R> {
     /// Build a pipeline with a custom resolver.
-    pub fn with_resolver(
-        config: HydraConfig,
-        resolver: R,
-        warmer_config: WarmerConfig,
-    ) -> Self {
+    pub fn with_resolver(config: HydraConfig, resolver: R, warmer_config: WarmerConfig) -> Self {
         let epoch = current_epoch(config.epoch_len);
         let pool = accepted_pool_window(
             config.master_secret(),
@@ -155,11 +149,7 @@ impl<R: Resolver> Pipeline<R> {
 
         // 5. Open a REALITY-authenticated TLS connection.
         //    The `dest` is the CDN edge the server is fronted by.
-        let server_addr = self
-            .config
-            .dest
-            .as_deref()
-            .unwrap_or("127.0.0.1:443");
+        let server_addr = self.config.dest.as_deref().unwrap_or("127.0.0.1:443");
 
         // For now, without the `boring-impersonate` feature, we fall back to a
         // plain TCP connection to demonstrate the pipeline flow. The full
