@@ -57,7 +57,7 @@ param(
     [ValidateSet("Check","Build","Test","Install","Config","Uninstall","Status")]
     [string[]]$Action,
 
-    [string]$Features = "full",
+    [string]$Features = "",
 
     [string]$InstallDir,
     [string]$ConfigDir,
@@ -68,7 +68,7 @@ param(
     [switch]$VerboseOutput
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 $Version = "0.1.0"
 $RepoRoot = $PSScriptRoot
 
@@ -136,12 +136,12 @@ function Test-RustToolchain {
     $hasCargo  = $null -ne (Get-Command cargo  -ErrorAction SilentlyContinue)
 
     if ($hasRustup) {
-        $rv = (rustup --version 2>$null) -replace "`n.*",""
-        $cv = (cargo  --version 2>$null) -replace "`n.*",""
+        $rv = (cmd /c "rustup --version 2>nul") -replace "`n.*",""
+        $cv = (cmd /c "cargo --version 2>nul") -replace "`n.*",""
         Write-Ok "rustup $rv"
         Write-Ok "cargo  $cv"
     } elseif ($hasCargo) {
-        $cv = (cargo --version 2>$null) -replace "`n.*",""
+        $cv = (cmd /c "cargo --version 2>nul") -replace "`n.*",""
         Write-Ok "cargo  $cv"
         Write-WarnMsg "rustup not found - managing toolchain upgrades may be manual"
     } else {
@@ -153,18 +153,31 @@ function Test-RustToolchain {
         # Refresh PATH for this session
         $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
         $env:PATH = $cargoBin + ";" + $env:PATH
-        $ver = & rustc --version 2>$null
+        $ver = cmd /c "rustc --version 2>nul"
         Write-Ok "Installed $ver"
     }
 
     # Version check - require 1.88+
-    $current = (& rustc --version 2>$null) -replace '.*?(\d+\.\d+\.\d+).*','$1'
+    $current = (cmd /c "rustc --version 2>nul") -replace '.*?(\d+\.\d+\.\d+).*','$1'
     $needed  = "1.88.0"
     if ([version]$current -lt [version]$needed) {
         Write-ErrMsg "Rust $needed+ required, found $current - run: rustup update"
         exit 1
     }
     Write-Ok "Rust $current meets minimum ($needed)"
+
+    # Check for cmake when full feature is requested (needed for BoringSSL)
+    if ($Features -eq "full") {
+        $hasCmake = $null -ne (Get-Command cmake -ErrorAction SilentlyContinue)
+        if (-not $hasCmake) {
+            Write-WarnMsg "'full' feature requires cmake (for BoringSSL). Not found."
+            Write-Host "  Either install cmake:  winget install cmake"
+            Write-Host "  Or build without it:   .\setup.ps1 -Features ''"
+            Write-ErrMsg "cmake not found - cannot build with 'full' feature"
+            exit 1
+        }
+        Write-Ok "cmake $(cmd /c 'cmake --version 2>nul' | Select-Object -First 1)"
+    }
 }
 
 # --- Build ---
@@ -174,8 +187,12 @@ function Invoke-Build {
         Write-WarnMsg "Skipping build (-SkipBuild)"
         return
     }
-    Write-Step "Building hydra-client (features: $Features, release)..."
-    $cargoArgs = @("build", "--release", "-p", "hydra-client", "--features", $Features)
+    $featuresLabel = if ([string]::IsNullOrWhiteSpace($Features)) { "none" } else { $Features }
+    Write-Step "Building hydra-client (features: $featuresLabel, release)..."
+    $cargoArgs = @("build", "--release", "-p", "hydra-client")
+    if (-not [string]::IsNullOrWhiteSpace($Features)) {
+        $cargoArgs += @("--features", $Features)
+    }
     if ($VerboseOutput) {
         & cargo @cargoArgs
     } else {
@@ -328,8 +345,8 @@ function Show-Status {
     Write-Host "Rust toolchain:" -ForegroundColor White
     $hasCargo = $null -ne (Get-Command cargo -ErrorAction SilentlyContinue)
     if ($hasCargo) {
-        $rv = & rustc --version 2>$null
-        $cv = & cargo --version 2>$null
+        $rv = cmd /c "rustc --version 2>nul"
+        $cv = cmd /c "cargo --version 2>nul"
         Write-Ok $rv
         Write-Ok $cv
     } else {
@@ -364,12 +381,13 @@ if (-not $Action -or $Action.Count -eq 0) {
 
 Set-Location $RepoRoot
 
+$didInstall = $false
 foreach ($a in $Action) {
     switch ($a) {
         "Check"     { Test-RustToolchain }
         "Build"     { Invoke-Build }
         "Test"      { Invoke-Test }
-        "Install"   { Invoke-Install }
+        "Install"   { Invoke-Install; $didInstall = $true }
         "Config"    { Invoke-Config }
         "Uninstall" { Invoke-Uninstall; Write-Host ""; return }
         "Status"    { Show-Status; return }
@@ -377,21 +395,28 @@ foreach ($a in $Action) {
     Write-Host ""
 }
 
-Write-Host "===========================================================" -ForegroundColor Cyan
-Write-Host "  REALITY-Hydra client installed successfully!" -ForegroundColor Green
-Write-Host "===========================================================" -ForegroundColor Cyan
-Write-Host ""
+if ($didInstall) {
+    Write-Host "===========================================================" -ForegroundColor Cyan
+    Write-Host "  REALITY-Hydra client installed successfully!" -ForegroundColor Green
+    Write-Host "===========================================================" -ForegroundColor Cyan
+    Write-Host ""
 
-$binMsg = "  Binary:  " + (Join-Path $InstallDir "hydra-client.exe")
-$cfgMsg = "  Config:  " + (Join-Path $ConfigDir "hydra.toml")
-Write-Host $binMsg
-Write-Host $cfgMsg
-Write-Host ""
-Write-Host "  Run the client:" -ForegroundColor White
-$runCmd = "    hydra-client.exe -c " + (Join-Path $ConfigDir "hydra.toml") + " --listen 127.0.0.1:1080"
-Write-Host $runCmd
-Write-Host ""
-Write-Host "  With real DNS + BoringSSL impersonation:" -ForegroundColor White
-$runFull = "    hydra-client.exe --features full -c " + (Join-Path $ConfigDir "hydra.toml") + " --listen 127.0.0.1:1080"
-Write-Host $runFull
-Write-Host ""
+    $binMsg = "  Binary:  " + (Join-Path $InstallDir "hydra-client.exe")
+    $cfgMsg = "  Config:  " + (Join-Path $ConfigDir "hydra.toml")
+    Write-Host $binMsg
+    Write-Host $cfgMsg
+    Write-Host ""
+    Write-Host "  Run the client:" -ForegroundColor White
+    $runCmd = "    hydra-client.exe -c " + (Join-Path $ConfigDir "hydra.toml") + " --listen 127.0.0.1:1080"
+    Write-Host $runCmd
+    Write-Host ""
+    Write-Host "  With real DNS + BoringSSL impersonation:" -ForegroundColor White
+    $runFull = "    hydra-client.exe --features full -c " + (Join-Path $ConfigDir "hydra.toml") + " --listen 127.0.0.1:1080"
+    Write-Host $runFull
+    Write-Host ""
+} else {
+    Write-Host "===========================================================" -ForegroundColor Cyan
+    Write-Host "  Done." -ForegroundColor Green
+    Write-Host "===========================================================" -ForegroundColor Cyan
+    Write-Host ""
+}
