@@ -1,0 +1,11 @@
+[package]
+name = "hardening"
+description = "REALITY-Hydra Phase 7: hardening checklist, distribution validation, and metrics for the pool engine, DNS warmer, and health checker."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+pool-engine = { path = "../pool-engine" }
+thiserror.workspace = true

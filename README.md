@@ -33,19 +33,20 @@ real domain on the same CDN your server is fronted by (see the three traps in
 
 ## Status
 
-Built in the phases laid out in [`REALITY.md` §10](REALITY.md). The pure-logic and
-offline-testable phases are done; the camouflaged-TLS client (Phase 4) and live
-integration (Phase 5) are the remaining hard infrastructure work.
+Built in the phases laid out in REALITY.md §10. All seven phases are
+implemented: the pure-logic core, the network-touching crates (feature-gated),
+the BoringSSL TLS impersonation client, the full integration pipeline, and the
+hardening suite.
 
 | Phase | Component | Crate | Status |
 |---|---|---|---|
 | 1 | **PoolEngine** — keyed, time-evolving SNI pool (pure logic) | [`crates/pool-engine`](crates/pool-engine) | ✅ done |
 | 2 | **HealthChecker** — async coherence / cert+SAN / ALPN / latency checks | [`crates/health-checker`](crates/health-checker) | ✅ done |
 | 3 | **DnsWarmer** — real resolve-on-first-use, TTL-aware cache | [`crates/dns-warmer`](crates/dns-warmer) | ✅ done |
-| 4 | RealityTLS — uTLS-equivalent ClientHello + REALITY auth | — | planned |
-| 5 | Integration against stock Xray (behind a CDN) | — | planned |
+| 4 | **RealityTLS** — uTLS-equivalent ClientHello + REALITY auth | [`crates/reality-tls`](crates/reality-tls) | ✅ done |
+| 5 | **Integration** — SOCKS5 inbound → PoolEngine → DnsWarmer → RealityTLS → CDN edge | [`crates/hydra-client`](crates/hydra-client) | ✅ done |
 | 6 | **hydra-cli** — server-side epoch automation (`serverNames`) | [`crates/hydra-cli`](crates/hydra-cli) | ✅ done |
-| 7 | Hardening & measurement | — | planned |
+| 7 | **Hardening** — checklist, distribution validation, metrics | [`crates/hardening`](crates/hardening) | ✅ done |
 
 ## Architecture
 
@@ -61,8 +62,10 @@ integration (Phase 5) are the remaining hard infrastructure work.
                  └────────────────────────────────────────────────────────┘
 ```
 
-The crates in this workspace are the **new code**. `RealityTLS` (Phase 4) is the
-hard infrastructure piece; the server inbound is **stock Xray, fronted by a CDN**.
+The crates in this workspace are the **new code**. `RealityTLS` (Phase 4)
+provides the Chrome-fingerprinted TLS with embedded X25519 auth; `hydra-client`
+(Phase 5) wires everything into a SOCKS5 proxy; the server inbound is **stock
+Xray, fronted by a CDN**.
 
 ## Crates
 
@@ -71,15 +74,19 @@ hard infrastructure piece; the server inbound is **stock Xray, fronted by a CDN*
 | [`pool-engine`](crates/pool-engine) | The novel core: `MasterList` → keyed epoch subset → sticky weighted `Selector`; loads `hydra.toml` (secret zeroized). | pure logic |
 | [`dns-warmer`](crates/dns-warmer) | Guarantees a *real* DNS lookup happened before an SNI is used (defeats Trap 1). Mockable `Resolver` seam; real `hickory` behind `live-dns`. | feature-gated |
 | [`health-checker`](crates/health-checker) | Prunes the pool: DNS lands in the CDN range, leaf cert SAN matches, ALPN `h2`, latency sane (defeats Traps 2 & 3, P1/P8). Mockable seams; real TLS behind `live-tls`. | feature-gated |
+| [`reality-tls`](crates/reality-tls) | Chrome-fingerprinted TLS client via BoringSSL + REALITY X25519 auth in session ID. Auth/crypto is pure logic; connector is behind `boring-impersonate`. | feature-gated |
+| [`hydra-client`](crates/hydra-client) | Full integration: SOCKS5 inbound → PoolEngine → Selector → DnsWarmer → RealityTLS → CDN edge. Binary + library. | feature-gated |
 | [`hydra-cli`](crates/hydra-cli) | The `hydra` binary: derive this epoch's accepted `serverNames` and emit them as lines, JSON, or a paste-ready Xray inbound. | none |
+| [`hardening`](crates/hardening) | Checklist (8 invariants), χ² distribution validation, metrics (12 counters with snapshot/delta). | pure logic |
 
 Everything builds and the entire test suite runs **with no network and no TLS
-provider** — the live paths are opt-in Cargo features (`live-dns`, `live-tls`).
+provider** — the live paths are opt-in Cargo features (`live-dns`, `live-tls`,
+`boring-impersonate`).
 
 ## Quickstart
 
 ```bash
-# Build everything and run the full suite (offline; ~57 tests).
+# Build everything and run the full suite (offline; ~70+ tests).
 cargo test --workspace
 
 # Lints and formatting must be clean.
@@ -114,6 +121,16 @@ cargo run -p hydra-cli -- -c crates/pool-engine/fixtures/hydra.toml --at 1735689
 `--single` emits the exact single-epoch subset; the default is the ±1 epoch
 acceptance window a server should publish so a clock-skewed client still matches.
 
+### Running the client (Phase 5)
+
+```bash
+# Start a SOCKS5 proxy backed by the Hydra pipeline (offline/mock mode):
+cargo run -p hydra-client -- -c crates/pool-engine/fixtures/hydra.toml --listen 127.0.0.1:1080
+
+# With real DNS and BoringSSL impersonation:
+cargo run -p hydra-client --features full -- -c /etc/hydra/hydra.toml --listen 127.0.0.1:1080
+```
+
 ### Live network paths (opt-in)
 
 ```bash
@@ -122,6 +139,9 @@ cargo test -p dns-warmer --features live-dns
 
 # Real TLS validation probe (rustls + ring):
 cargo test -p health-checker --features live-tls
+
+# Chrome-fingerprinted TLS connector (requires BoringSSL toolchain):
+cargo test -p reality-tls --features boring-impersonate
 ```
 
 ## Configuration

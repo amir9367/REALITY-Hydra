@@ -1,0 +1,28 @@
+[package]
+name = "reality-tls"
+description = "REALITY-Hydra Phase 4: uTLS-equivalent ClientHello via BoringSSL impersonation + REALITY X25519 session-ID auth (REALITY.md §7 P7)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# X25519 key exchange: ephemeral client keypair + shared-secret derivation.
+x25519-dalek.workspace = true
+# AES-256-GCM: encrypt the auth payload (client_pub || timestamp || short_id).
+aes-gcm.workspace = true
+# HKDF-SHA256: derive per-message nonce from the shared secret.
+hkdf.workspace = true
+# Pinned to 0.10 (digest 0.10) so it matches aes-gcm 0.10 / hkdf 0.12; the
+# workspace `sha2` is 0.11 (digest 0.11), which is incompatible with them.
+sha2 = "0.10"
+# Ergonomic error enum.
+thiserror.workspace = true
+# Async TCP for the connect path.
+tokio = { workspace = true }
+# BoringSSL impersonation (Chrome fingerprint) — off by default.
+boring = { workspace = true, optional = true }
+
+[features]
+default = []
+boring-impersonate = ["dep:boring"]

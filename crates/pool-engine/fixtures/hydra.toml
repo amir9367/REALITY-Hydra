@@ -1,37 +1,100 @@
-# Sample Hydra config (Phase 1 fields), used by the config-loading tests.
-# Mirrors REALITY.md §11. The keys below are RANDOM TEST VALUES — never reuse.
-master_secret = "base64:Mdzc9T8bRDckIYNV8C256E+OsuYfBiEca20zKwWhgo8="  # 32 bytes
-server_salt   = "base64:gLx8cgG8iAnZTZMiplCwEg=="                      # 16 bytes
+# Hydra config — real high-reputation domains for SNI pool rotation.
+# All domains below are hosted on major CDNs. Adjust `dest` and
+# `coherence_cidrs` to match YOUR server's actual CDN fronting.
+master_secret = "base64:Mdzc9T8bRDckIYNV8C256E+OsuYfBiEca20zKwWhgo8="  # 32 bytes — ROTATE before production!
+server_salt   = "base64:gLx8cgG8iAnZTZMiplCwEg=="                      # 16 bytes — ROTATE before production!
 pool_format   = "hydra-pool-v1"
 epoch_len     = "6h"
-active_k      = 4
+active_k      = 6                              # SNIs live per epoch (increase with pool size)
 
-# Network-layer fields — unused in Phase 1, validated/used by later phases.
-dest            = "cdn-edge.example:443"
-coherence_cidrs = ["104.16.0.0/13"]
+# Network-layer fields — set to YOUR CDN edge.
+# Cloudflare example: replace with your actual origin or CDN edge.
+dest            = "www.cloudflare.com:443"
+coherence_cidrs = [
+    "104.16.0.0/13",    # Cloudflare
+    "172.64.0.0/13",    # Cloudflare
+    "173.245.48.0/20",  # Cloudflare
+    "103.21.244.0/22",  # Cloudflare
+    "103.22.200.0/22",  # Cloudflare
+    "103.31.4.0/22",    # Cloudflare
+    "141.101.64.0/18",  # Cloudflare
+    "108.162.192.0/18", # Cloudflare
+    "190.93.240.0/20",  # Cloudflare
+    "188.114.96.0/20",  # Cloudflare
+    "197.234.240.0/22", # Cloudflare
+    "198.41.128.0/17",  # Cloudflare
+    "162.158.0.0/15",   # Cloudflare
+    "131.0.72.0/22",    # Cloudflare
+]
 
-# All entries must be real domains on the SAME CDN as `dest` (these are fakes).
+# ── Pool: high-reputation domains (Tranco top ~50 tier) ───────────
+# Weight ≈ relative popularity. All must be genuine CDN tenants for
+# the same CDN your server is fronted by.
+
+# Tier 1 — mega-scale (weight 8-10)
 [[pool]]
-sni = "assets.cdn.example"
+sni    = "www.amazon.com"
+weight = 10.0
+[[pool]]
+sni    = "www.google.com"
+weight = 10.0
+[[pool]]
+sni    = "www.apple.com"
+weight = 9.5
+[[pool]]
+sni    = "www.microsoft.com"
+weight = 9.0
+[[pool]]
+sni    = "www.facebook.com"
+weight = 9.0
+
+# Tier 2 — very popular (weight 6-8)
+[[pool]]
+sni    = "www.netflix.com"
 weight = 8.0
 [[pool]]
-sni = "img.cdn.example"
-weight = 6.5
+sni    = "www.sony.com"
+weight = 7.5
 [[pool]]
-sni = "static.cdn.example"
+sni    = "www.cloudflare.com"
+weight = 7.5
+[[pool]]
+sni    = "play.google.com"
+weight = 7.0
+[[pool]]
+sni    = "www.github.com"
+weight = 7.0
+
+# Tier 3 — popular (weight 4-6)
+[[pool]]
+sni    = "www.yahoo.com"
+weight = 6.0
+[[pool]]
+sni    = "www.linkedin.com"
+weight = 5.5
+[[pool]]
+sni    = "www.mozilla.org"
 weight = 5.0
 [[pool]]
-sni = "media.cdn.example"
+sni    = "www.wikipedia.org"
+weight = 5.0
+[[pool]]
+sni    = "www.twimg.com"
+weight = 4.5
+
+# Tier 4 — moderate (weight 2-4)
+[[pool]]
+sni    = "www.reddit.com"
 weight = 4.0
 [[pool]]
-sni = "api.cdn.example"
+sni    = "www.twitch.tv"
+weight = 3.5
+[[pool]]
+sni    = "www.spotify.com"
+weight = 3.5
+[[pool]]
+sni    = "www.paypal.com"
 weight = 3.0
 [[pool]]
-sni = "cdn1.cdn.example"
-weight = 2.0
-[[pool]]
-sni = "cdn2.cdn.example"
-weight = 1.5
-[[pool]]
-sni = "edge.cdn.example"
-weight = 1.0
+sni    = "www.dropbox.com"
+weight = 2.5
