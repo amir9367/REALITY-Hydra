@@ -60,15 +60,21 @@ DISTRO=""; DISTRO_FAMILY=""; PKG=""; ARCH=""; ARCH_OK=1
 
 # ─── Distro + architecture detection (mirrors 3x-ui) ───────────────
 scan_system() {
+    local os_file=""
     if [ -r /etc/os-release ]; then
-        # shellcheck disable=SC1091
-        . /etc/os-release
+        os_file=/etc/os-release
     elif [ -r /usr/lib/os-release ]; then
-        # shellcheck disable=SC1091
-        . /usr/lib/os-release
+        os_file=/usr/lib/os-release
     else
         die "Cannot read /etc/os-release — unsupported system."
     fi
+    # Read os-release in a SUBSHELL and export only the fields we need. Sourcing
+    # it directly would clobber this installer's own $VERSION (os-release also
+    # defines VERSION=…), corrupting the banner (e.g. "v24.04.4 LTS").
+    local ID ID_LIKE PRETTY_NAME
+    # shellcheck disable=SC1090
+    eval "$(. "$os_file"; printf 'ID=%q\nID_LIKE=%q\nPRETTY_NAME=%q\n' \
+        "${ID:-}" "${ID_LIKE:-}" "${PRETTY_NAME:-}")"
     DISTRO="${ID:-unknown}"
 
     case "$DISTRO" in
@@ -162,7 +168,30 @@ ensure_build_deps() {
         case "$a" in [Nn]*) warn "Skipping dependency install (build may fail)."; return 0 ;; esac
     fi
     need_root
-    pkg_install "${need[@]}" || warn "Some packages failed to install; continuing."
+    if ! pkg_install "${need[@]}"; then
+        warn "Some packages failed to install."
+        # A broken dpkg state is the usual culprit on Debian/Ubuntu — surface the fix.
+        if [ "$PKG" = apt ]; then
+            warn "If you saw 'dpkg was interrupted', run this and retry:"
+            warn "    sudo dpkg --configure -a && sudo apt-get install -y ${need[*]}"
+        fi
+    fi
+
+    # Verify the C linker actually exists — the Rust build needs `cc`. Without
+    # this check the script used to print '✔ Build dependencies ready' and then
+    # die later with 'linker `cc` not found', which is much harder to diagnose.
+    if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
+        err "No C compiler (cc/gcc) found — the Rust build will fail with 'linker \`cc\` not found'."
+        case "$DISTRO_FAMILY" in
+            debian) err "Fix: sudo dpkg --configure -a && sudo apt-get install -y build-essential" ;;
+            rhel)   err "Fix: sudo $PKG install -y gcc gcc-c++ make" ;;
+            arch)   err "Fix: sudo pacman -S --needed base-devel" ;;
+            suse)   err "Fix: sudo zypper install -y gcc gcc-c++ make" ;;
+            alpine) err "Fix: sudo apk add build-base" ;;
+            *)      err "Install your distro's C toolchain (gcc/make) and re-run." ;;
+        esac
+        die "Cannot continue without a C compiler."
+    fi
     ok "Build dependencies ready"
 }
 
