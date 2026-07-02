@@ -100,8 +100,16 @@ scan_system() {
 
     info "Distro:  ${BOLD}${PRETTY_NAME:-$DISTRO}${NC} (family: ${DISTRO_FAMILY}, pkg: ${PKG:-none})"
     info "Arch:    ${BOLD}${ARCH}${NC} $([ "$ARCH_OK" = 1 ] && echo "" || echo "${YELLOW}(untested)${NC}")"
-    [ "$DISTRO_FAMILY" = "unknown" ] && warn "Unrecognized distro — will try '$PKG' and rustup; may need manual deps."
-    [ -z "${PKG:-}" ] && warn "No known package manager found — install build deps manually if the build fails."
+    # NOTE: use `if` blocks, not `[ … ] && warn`. Under `set -e`, a trailing
+    # `[ false ] && cmd` makes this function return non-zero, which aborts the
+    # whole script right here — before the menu ever prints.
+    if [ "$DISTRO_FAMILY" = "unknown" ]; then
+        warn "Unrecognized distro — will try '$PKG' and rustup; may need manual deps."
+    fi
+    if [ -z "${PKG:-}" ]; then
+        warn "No known package manager found — install build deps manually if the build fails."
+    fi
+    return 0
 }
 
 # Elevate a command with sudo when not root.
