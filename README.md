@@ -56,7 +56,7 @@ installers offer to pull in.
 ### 1. Server (Linux)
 
 ```bash
-git clone [<this-repo>](https://github.com/amir9367/REALITY-Hydra) && cd reality-hydra
+git clone https://github.com/amir9367/REALITY-Hydra && cd reality-hydra
 sudo ./setup.sh server
 ```
 
