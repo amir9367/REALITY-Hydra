@@ -18,7 +18,7 @@ use std::sync::Arc;
 use dns_warmer::{DnsWarmer, MockResolver, Resolver, WarmerConfig};
 use pool_engine::{ActivePool, Epoch, HydraConfig, Selector, accepted_pool_window, current_epoch};
 use tokio::io::{self, AsyncRead, AsyncWrite};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
 use crate::error::ClientError;
@@ -156,9 +156,15 @@ impl<R: Resolver> Pipeline<R> {
         // RealityTLS client requires BoringSSL.
         #[cfg(feature = "boring-impersonate")]
         let outbound = {
+            // Load the REALITY keys from the config's `[reality]` table.
+            let reality = self.config.reality.as_ref().ok_or_else(|| ClientError::Reality(
+                reality_tls::RealityError::BoringConfig(
+                    "config has no [reality] section; run `hydra init` or add public_key".into(),
+                ),
+            ))?;
             let reality_cfg = reality_tls::RealityConfig::new(
-                [0u8; 32], // TODO: load from hydra.toml
-                vec![],
+                reality.public_key,
+                reality.short_ids.clone(),
                 reality_tls::Fingerprint::default(),
             )?;
             let client = reality_tls::RealityClient::new(reality_cfg)?;
@@ -172,6 +178,37 @@ impl<R: Resolver> Pipeline<R> {
         relay(inbound, outbound).await;
 
         Ok(())
+    }
+}
+
+impl<R: Resolver + Send + Sync + 'static> Pipeline<R> {
+    /// Accept SOCKS5 connections on `addr` and route each through the pipeline.
+    ///
+    /// Runs until the listener errors. Each connection is handled on its own
+    /// task; per-connection errors are logged and do not stop the server. Both
+    /// the `hydra-client` binary and `hydra serve` call this, so the accept loop
+    /// lives in one place.
+    pub async fn serve(self, addr: &str) -> Result<(), ClientError> {
+        let listener = TcpListener::bind(addr)
+            .await
+            .map_err(|e| ClientError::Bind {
+                addr: addr.to_string(),
+                message: e.to_string(),
+            })?;
+
+        eprintln!("hydra-client: listening on {addr}");
+
+        loop {
+            let (stream, peer) = listener.accept().await?;
+            eprintln!("hydra-client: connection from {peer}");
+
+            let pipeline = self.clone();
+            tokio::spawn(async move {
+                if let Err(e) = pipeline.handle_connection(stream).await {
+                    eprintln!("hydra-client: connection error: {e}");
+                }
+            });
+        }
     }
 }
 

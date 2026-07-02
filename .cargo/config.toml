@@ -1,0 +1,3 @@
+[alias]
+# Run the developer task runner: `cargo xtask <check|build|test|install|config|all>`.
+xtask = "run --quiet --package xtask --"

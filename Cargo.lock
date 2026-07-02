@@ -1049,10 +1049,15 @@ dependencies = [
 name = "hydra-cli"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "clap",
+ "dns-warmer",
+ "hydra-client",
  "pool-engine",
+ "reality-tls",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -1785,6 +1790,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-boring",
  "x25519-dalek",
 ]
 
@@ -2291,6 +2297,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-boring"
+version = "4.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7b5955a3dc76ca07e3401e07d35f98c968e28f1a6126b552a51fa4bccd75528"
+dependencies = [
+ "boring",
+ "boring-sys",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-macros"
 version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2741,6 +2758,13 @@ dependencies = [
  "rusticata-macros",
  "thiserror 1.0.69",
  "time",
+]
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "clap",
 ]
 
 [[package]]

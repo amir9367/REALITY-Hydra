@@ -1,412 +1,629 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ─── REALITY-Hydra setup ───────────────────────────────────────────
-# Builds, tests, and installs both binaries:
-#   hydra-client  (client SOCKS5 proxy)
-#   hydra         (server-side epoch automation CLI)
+# ─── REALITY-Hydra installer (Linux) ───────────────────────────────
+# A single, 3x-ui-style CLI that installs and manages BOTH sides on Linux:
+#
+#   • server  — builds `hydra`, generates the shared secret/salt + REALITY keys,
+#               installs a systemd service + epoch timer, and prints a one-paste
+#               connection bundle to hand to clients.
+#   • client  — builds `hydra`, takes the bundle (or manual values) from a
+#               server, writes hydra.toml, and runs a SOCKS5 proxy.
+#
+# The intended flow is: run the SERVER install first; it prints the salt, key,
+# address and a `hydra://…` bundle. Then run the CLIENT install and paste the
+# bundle (or the individual values) in.
+#
+# Run with no arguments for the interactive menu, or pass a subcommand:
+#   ./setup.sh server | client | status | rotate | bundle | uninstall
 # ───────────────────────────────────────────────────────────────────
 
-VERSION="0.1.0"
+VERSION="0.3.0"
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-# Defaults
-INSTALL_DIR="$HOME/.local/bin"
-CONFIG_DIR="/etc/hydra"
-FEATURES="full"
-ACTIONS=()
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
-
+# ─── Colors / output helpers (3x-ui style) ─────────────────────────
+if [ -t 1 ]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+    CYAN='\033[0;36m'; BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
+else
+    RED=''; GREEN=''; YELLOW=''; CYAN=''; BLUE=''; BOLD=''; NC=''
+fi
 info()  { echo -e "${CYAN}▸${NC} $*"; }
 ok()    { echo -e "${GREEN}✔${NC} $*"; }
 warn()  { echo -e "${YELLOW}⚠${NC} $*"; }
 err()   { echo -e "${RED}✘${NC} $*" >&2; }
 die()   { err "$@"; exit 1; }
-
-# ─── Help ──────────────────────────────────────────────────────────
-
-usage() {
-    echo -e "${BOLD}REALITY-Hydra Setup${NC} ${CYAN}v${VERSION}${NC}"
-    echo ""
-    echo -e "${BOLD}USAGE:${NC}"
-    echo "    ./setup.sh [ACTION...] [OPTIONS]"
-    echo ""
-    echo -e "${BOLD}ACTIONS:${NC}"
-    echo "    (no action)     Run full pipeline: check → build → test → install → config"
-    echo "    --check         Check prerequisites only (Rust toolchain)"
-    echo "    --build         Build the workspace (release mode)"
-    echo "    --test          Run tests, clippy, and fmt checks"
-    echo "    --install       Install binaries to INSTALL_DIR"
-    echo "    --config        Install sample config to CONFIG_DIR"
-    echo "    --uninstall     Remove installed binaries and config"
-    echo "    --status        Show installed binaries and config locations"
-    echo ""
-    echo -e "${BOLD}OPTIONS:${NC}"
-    echo "    -f, --features=FEAT   Cargo features to enable (default: full)"
-    echo "    -i, --install-dir=DIR Binary install directory (default: ~/.local/bin)"
-    echo "    -c, --config-dir=DIR  Config install directory (default: /etc/hydra)"
-    echo "    -s, --skip-tests      Skip test suite"
-    echo "    -b, --skip-build      Skip build step"
-    echo "    -n, --no-config       Skip config installation"
-    echo "    -v, --verbose         Verbose output"
-    echo "    -h, --help            Show this help"
-    echo "    -V, --version         Show version"
-    echo ""
-    echo -e "${BOLD}EXAMPLES:${NC}"
-    echo -e "    ${CYAN}# Full install (everything)${NC}"
-    echo "    ./setup.sh"
-    echo ""
-    echo -e "    ${CYAN}# Build + test only (no install)${NC}"
-    echo "    ./setup.sh --check --build --test"
-    echo ""
-    echo -e "    ${CYAN}# Install only (skip build and tests)${NC}"
-    echo "    ./setup.sh --install --config --skip-build --skip-tests"
-    echo ""
-    echo -e "    ${CYAN}# Custom install dir${NC}"
-    echo "    ./setup.sh --install-dir /usr/local/bin"
-    echo ""
-    echo -e "    ${CYAN}# Build with only live-dns feature${NC}"
-    echo "    ./setup.sh --build --features live-dns"
-    echo ""
-    echo -e "    ${CYAN}# Check what's installed${NC}"
-    echo "    ./setup.sh --status"
-    echo ""
-    echo -e "    ${CYAN}# Clean uninstall${NC}"
-    echo "    ./setup.sh --uninstall"
-    echo ""
-    echo -e "${BOLD}ENVIRONMENT:${NC}"
-    echo "    INSTALL_DIR     Same as --install-dir"
-    echo "    CONFIG_DIR      Same as --config-dir"
-    echo "    FEATURES        Same as --features"
-    echo "    SKIP_TESTS      Set to 1 to skip tests"
-    echo "    SKIP_BUILD      Set to 1 to skip build"
-    echo ""
+banner() {
+    echo -e "${CYAN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  REALITY-Hydra Installer${NC} ${BOLD}v${VERSION}${NC}  ${CYAN}(Linux)${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════════════════════${NC}"
 }
 
-# ─── Arg parsing ───────────────────────────────────────────────────
-
-parse_args() {
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --check|--build|--test|--install|--config|--uninstall|--status)
-                ACTIONS+=("$1")
-                shift
-                ;;
-            -f|--features)
-                [ -z "${2:-}" ] && die "Option $1 requires a value"
-                FEATURES="$2"; shift 2
-                ;;
-            --features=*)
-                FEATURES="${1#*=}"; shift
-                ;;
-            -i|--install-dir)
-                [ -z "${2:-}" ] && die "Option $1 requires a value"
-                INSTALL_DIR="$2"; shift 2
-                ;;
-            --install-dir=*)
-                INSTALL_DIR="${1#*=}"; shift
-                ;;
-            -c|--config-dir)
-                [ -z "${2:-}" ] && die "Option $1 requires a value"
-                CONFIG_DIR="$2"; shift 2
-                ;;
-            --config-dir=*)
-                CONFIG_DIR="${1#*=}"; shift
-                ;;
-            -s|--skip-tests)
-                SKIP_TESTS=1; shift
-                ;;
-            -b|--skip-build)
-                SKIP_BUILD=1; shift
-                ;;
-            -n|--no-config)
-                NO_CONFIG=1; shift
-                ;;
-            -v|--verbose)
-                VERBOSE=1; shift
-                ;;
-            -h|--help)
-                usage; exit 0
-                ;;
-            -V|--version)
-                echo "setup.sh v${VERSION}"; exit 0
-                ;;
-            -*)
-                die "Unknown option: $1 (use --help for usage)"
-                ;;
-            *)
-                die "Unexpected argument: $1 (use --help for usage)"
-                ;;
-        esac
-    done
-}
-
-VERBOSE="${VERBOSE:-0}"
+# ─── Defaults (overridable by flags / env) ─────────────────────────
+ROLE=""                                # server | client (empty = ask)
+FEATURES="${FEATURES:-}"               # empty = no native TLS toolchain needed
+SERVER_INSTALL_DIR="${SERVER_INSTALL_DIR:-/usr/local/bin}"
+SERVER_CONFIG_DIR="${SERVER_CONFIG_DIR:-/etc/hydra}"
+CLIENT_INSTALL_DIR="${CLIENT_INSTALL_DIR:-$HOME/.local/bin}"
+CLIENT_CONFIG_DIR="${CLIENT_CONFIG_DIR:-$HOME/.config/hydra}"
+LISTEN="${LISTEN:-127.0.0.1:1080}"
+PORT="${PORT:-443}"
+SCHEDULE="${SCHEDULE:-hourly}"         # systemd OnCalendar for the server timer
 SKIP_TESTS="${SKIP_TESTS:-0}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
-NO_CONFIG="${NO_CONFIG:-0}"
+ASSUME_YES="${ASSUME_YES:-0}"
+NONINTERACTIVE="${HYDRA_NONINTERACTIVE:-0}"
+[ -t 0 ] || NONINTERACTIVE=1           # piped stdin → non-interactive
 
-# ─── Actions ───────────────────────────────────────────────────────
+# Detected platform facts (filled by scan_system).
+DISTRO=""; DISTRO_FAMILY=""; PKG=""; ARCH=""; ARCH_OK=1
 
-check_rust() {
-    info "Checking Rust toolchain..."
-
-    # Source cargo env if it exists (handles missing PATH entries)
-    if [ -f "$HOME/.cargo/env" ]; then
+# ─── Distro + architecture detection (mirrors 3x-ui) ───────────────
+scan_system() {
+    if [ -r /etc/os-release ]; then
         # shellcheck disable=SC1091
-        source "$HOME/.cargo/env" 2>/dev/null || true
-    fi
-
-    # Install rustup if missing
-    if ! command -v rustup &>/dev/null; then
-        warn "Rust not found. Installing via rustup..."
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        if [ -f "$HOME/.cargo/env" ]; then
-            # shellcheck disable=SC1091
-            source "$HOME/.cargo/env"
-        fi
-        if ! command -v rustc &>/dev/null; then
-            die "Rust installation failed"
-        fi
-        ok "installed $(rustc --version)"
+        . /etc/os-release
+    elif [ -r /usr/lib/os-release ]; then
+        # shellcheck disable=SC1091
+        . /usr/lib/os-release
     else
-        ok "rustup $(rustup --version 2>/dev/null | head -1)"
+        die "Cannot read /etc/os-release — unsupported system."
+    fi
+    DISTRO="${ID:-unknown}"
+
+    case "$DISTRO" in
+        ubuntu|debian|raspbian|linuxmint|pop|elementary|zorin|kali|armbian|devuan)
+            DISTRO_FAMILY="debian"; PKG="apt" ;;
+        fedora|rhel|centos|rocky|almalinux|ol|amzn|virtuozzo)
+            DISTRO_FAMILY="rhel"
+            if command -v dnf >/dev/null 2>&1; then PKG="dnf"; else PKG="yum"; fi ;;
+        arch|manjaro|endeavouros|garuda|parch|artix)
+            DISTRO_FAMILY="arch"; PKG="pacman" ;;
+        opensuse*|sles|suse)
+            DISTRO_FAMILY="suse"; PKG="zypper" ;;
+        alpine)
+            DISTRO_FAMILY="alpine"; PKG="apk" ;;
+        *)
+            DISTRO_FAMILY="unknown"
+            for p in apt dnf yum pacman zypper apk; do
+                command -v "$p" >/dev/null 2>&1 && { PKG="$p"; break; }
+            done ;;
+    esac
+
+    case "$(uname -m)" in
+        x86_64|amd64)          ARCH="x86_64" ;;
+        aarch64|arm64)         ARCH="aarch64" ;;
+        armv7l|armv7|armv6l)   ARCH="arm" ;;
+        i386|i686|x86)         ARCH="x86" ;;
+        *)                     ARCH="$(uname -m)"; ARCH_OK=0 ;;
+    esac
+
+    info "Distro:  ${BOLD}${PRETTY_NAME:-$DISTRO}${NC} (family: ${DISTRO_FAMILY}, pkg: ${PKG:-none})"
+    info "Arch:    ${BOLD}${ARCH}${NC} $([ "$ARCH_OK" = 1 ] && echo "" || echo "${YELLOW}(untested)${NC}")"
+    [ "$DISTRO_FAMILY" = "unknown" ] && warn "Unrecognized distro — will try '$PKG' and rustup; may need manual deps."
+    [ -z "${PKG:-}" ] && warn "No known package manager found — install build deps manually if the build fails."
+}
+
+# Elevate a command with sudo when not root.
+SUDO=""
+need_root() { [ "$(id -u)" -eq 0 ] || SUDO="sudo"; }
+
+# Install a list of native packages via the detected package manager.
+pkg_install() {
+    [ $# -eq 0 ] && return 0
+    [ -z "${PKG:-}" ] && { warn "No package manager — skipping: $*"; return 0; }
+    info "Installing packages: $*"
+    case "$PKG" in
+        apt)    $SUDO apt-get update -qq && $SUDO apt-get install -y "$@" ;;
+        dnf)    $SUDO dnf install -y "$@" ;;
+        yum)    $SUDO yum install -y "$@" ;;
+        pacman) $SUDO pacman -Sy --needed --noconfirm "$@" ;;
+        zypper) $SUDO zypper --non-interactive install "$@" ;;
+        apk)    $SUDO apk add --no-cache "$@" ;;
+    esac
+}
+
+# Map generic dep names to this distro's package names, then install what's missing.
+ensure_build_deps() {
+    info "Scanning build requirements..."
+    local want=() need=()
+
+    # C toolchain + pkg-config + curl + git are always useful; cmake only for `full`.
+    case "$DISTRO_FAMILY" in
+        debian) want=(curl git pkg-config build-essential libssl-dev) ;;
+        rhel)   want=(curl git pkgconf-pkg-config gcc gcc-c++ make openssl-devel) ;;
+        arch)   want=(curl git pkgconf base-devel openssl) ;;
+        suse)   want=(curl git pkg-config gcc gcc-c++ make libopenssl-devel) ;;
+        alpine) want=(curl git pkgconf build-base openssl-dev) ;;
+        *)      want=(curl git) ;;
+    esac
+    if [ "$FEATURES" = "full" ] || [[ ",$FEATURES," == *",boring-impersonate,"* ]]; then
+        case "$DISTRO_FAMILY" in
+            debian|rhel|suse|alpine) want+=(cmake) ;;
+            arch)                    want+=(cmake) ;;
+            *)                       want+=(cmake) ;;
+        esac
+        # BoringSSL also wants a modern clang/go on some distros; nasm not needed with `ring`.
     fi
 
-    # Verify cargo actually works (not just that the binary exists)
-    local cargo_ver=""
-    if ! cargo_ver="$(cargo --version 2>/dev/null)"; then
-        warn "cargo is broken — force-reinstalling stable toolchain..."
-        rustup toolchain uninstall stable 2>/dev/null || true
-        rustup toolchain install stable -y
-        if ! cargo_ver="$(cargo --version 2>/dev/null)"; then
-            die "Could not repair Rust toolchain. Try: rustup toolchain uninstall stable && rustup toolchain install stable"
-        fi
+    # Only install what's actually missing (checked by the command, best-effort).
+    for p in "${want[@]}"; do need+=("$p"); done
+    if [ "$ASSUME_YES" != 1 ] && [ "$NONINTERACTIVE" != 1 ]; then
+        echo -e "  Will ensure: ${BOLD}${need[*]}${NC}"
+        read -rp "  Install missing build dependencies now? [Y/n] " a
+        case "$a" in [Nn]*) warn "Skipping dependency install (build may fail)."; return 0 ;; esac
     fi
-    ok "cargo  $cargo_ver"
+    need_root
+    pkg_install "${need[@]}" || warn "Some packages failed to install; continuing."
+    ok "Build dependencies ready"
+}
 
-    # Verify rustc works
-    local rustc_ver=""
-    if ! rustc_ver="$(rustc --version 2>/dev/null)"; then
-        warn "rustc is broken — force-reinstalling stable toolchain..."
-        rustup toolchain uninstall stable 2>/dev/null || true
-        rustup toolchain install stable -y
-        if ! rustc_ver="$(rustc --version 2>/dev/null)"; then
-            die "Could not repair rustc. Try: rustup toolchain uninstall stable && rustup toolchain install stable"
-        fi
+# ─── Rust toolchain (rustup stable, the most compatible choice) ────
+MIN_RUST_MAJOR=1; MIN_RUST_MINOR=88
+ensure_rust() {
+    [ -f "$HOME/.cargo/env" ] && { . "$HOME/.cargo/env" 2>/dev/null || true; }
+    if ! command -v cargo >/dev/null 2>&1; then
+        warn "Rust not found — installing via rustup (stable)..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+        [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+        command -v cargo >/dev/null 2>&1 || die "Rust installation failed."
     fi
-    ok "rustc  $rustc_ver"
+    local ver maj min
+    ver="$(rustc --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    maj="${ver%%.*}"; min="$(echo "$ver" | cut -d. -f2)"
+    if [ "${maj:-0}" -lt "$MIN_RUST_MAJOR" ] || { [ "${maj:-0}" -eq "$MIN_RUST_MAJOR" ] && [ "${min:-0}" -lt "$MIN_RUST_MINOR" ]; }; then
+        warn "Rust $ver < ${MIN_RUST_MAJOR}.${MIN_RUST_MINOR} — updating via rustup..."
+        rustup update stable && rustup default stable
+    fi
+    ok "$(rustc --version)"
+    ok "$(cargo --version)"
+}
 
-    # Version check — require 1.88+
-    local needed="1.88.0"
-    local current
-    current="$(echo "$rustc_ver" | sed 's/.*\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/')"
-    if [ "$(printf '%s\n%s\n' "$needed" "$current" | sort -V | head -1)" != "$needed" ]; then
-        die "Rust $needed+ required, found $current — run: rustup update"
-    fi
+# ─── Build / test ──────────────────────────────────────────────────
+feat_args() {
+    if [ -n "$FEATURES" ] && [ "$FEATURES" != "none" ]; then echo "--features $FEATURES"; fi
 }
 
 do_build() {
-    if [ "$SKIP_BUILD" = "1" ]; then
-        warn "Skipping build (SKIP_BUILD=1)"
-        return
-    fi
-    info "Building workspace (features: $FEATURES)..."
-    if [ "$VERBOSE" = "1" ]; then
-        cargo build --release --workspace --features "$FEATURES"
-    else
-        cargo build --release --workspace --features "$FEATURES" 2>&1 | tail -5
-    fi
-    ok "Build complete"
+    [ "$SKIP_BUILD" = 1 ] && { warn "Skipping build (SKIP_BUILD=1)"; return 0; }
+    info "Building release binary 'hydra' (features: ${FEATURES:-none})..."
+    # shellcheck disable=SC2046
+    ( cd "$REPO_ROOT" && cargo build --release -p hydra-cli $(feat_args) )
+    ok "Build complete → target/release/hydra"
 }
 
 do_test() {
-    if [ "$SKIP_TESTS" = "1" ]; then
-        warn "Skipping tests (SKIP_TESTS=1)"
-        return
-    fi
-    info "Running test suite..."
-    cargo test --workspace 2>&1
-    ok "All tests passed"
-
-    info "Running clippy lints..."
-    cargo clippy --all-targets -- -D warnings 2>&1
-    ok "Clippy clean"
-
-    info "Checking formatting..."
-    cargo fmt --all --check 2>&1
-    ok "Formatting clean"
+    [ "$SKIP_TESTS" = 1 ] && { warn "Skipping tests (SKIP_TESTS=1)"; return 0; }
+    info "Running workspace tests..."
+    ( cd "$REPO_ROOT" && cargo test --workspace )
+    ok "Tests passed"
 }
 
-do_install() {
-    mkdir -p "$INSTALL_DIR"
+hydra_src() { echo "$REPO_ROOT/target/release/hydra"; }
 
-    local bins=("hydra-client" "hydra")
-    local src_dir="$REPO_ROOT/target/release"
-
-    for bin in "${bins[@]}"; do
-        local src="$src_dir/$bin"
-        if [ ! -x "$src" ]; then
-            die "Binary not found: $src — run --build first"
-        fi
-        cp "$src" "$INSTALL_DIR/$bin"
-        chmod +x "$INSTALL_DIR/$bin"
-        ok "Installed $bin → $INSTALL_DIR/$bin"
-    done
-
-    if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-        warn "$INSTALL_DIR is not in your PATH"
-        echo "  Add to your shell profile:"
-        echo "    export PATH=\"$INSTALL_DIR:\$PATH\""
-    fi
+install_bin() {
+    local dir="$1"; local src; src="$(hydra_src)"
+    [ -x "$src" ] || die "hydra binary not found at $src — build first."
+    mkdir -p "$dir"
+    install -m 0755 "$src" "$dir/hydra" 2>/dev/null || { cp "$src" "$dir/hydra" && chmod 0755 "$dir/hydra"; }
+    ok "Installed hydra → $dir/hydra"
+    case ":$PATH:" in
+        *":$dir:"*) : ;;
+        *) warn "$dir is not on PATH — add: export PATH=\"$dir:\$PATH\"" ;;
+    esac
 }
 
-do_config() {
-    if [ "$NO_CONFIG" = "1" ]; then
-        warn "Skipping config (NO_CONFIG=1)"
-        return
-    fi
-
-    local target_config="$CONFIG_DIR/hydra.toml"
-    local sample_config="$REPO_ROOT/crates/pool-engine/fixtures/hydra.toml"
-
-    if [ -f "$target_config" ]; then
-        warn "Config already exists at $target_config — skipping"
-        return
-    fi
-
-    sudo mkdir -p "$CONFIG_DIR"
-    sudo cp "$sample_config" "$target_config"
-    sudo chmod 600 "$target_config"
-    ok "Sample config installed → $target_config"
-    warn "Edit $target_config with real master_secret + server_salt before deploying!"
+# ─── Connection bundle (portable client config, no private key) ────
+# A bundle is: hydra://<base64 of a client hydra.toml>. It carries everything a
+# client needs (secret, salt, pbk, short_id, dest, and the exact SNI pool) EXCEPT
+# the server private key, which is stripped. base64 keeps it a single copy-paste
+# token that both bash and PowerShell can decode without extra tooling.
+make_bundle() {
+    local server_cfg="$1"
+    # Strip the `private_key = ...` line so the bundle is client-safe.
+    local client_toml
+    client_toml="$(grep -v '^[[:space:]]*private_key' "$server_cfg")"
+    printf 'hydra://%s\n' "$(printf '%s' "$client_toml" | base64 | tr -d '\n')"
 }
 
-do_uninstall() {
-    info "Uninstalling REALITY-Hydra..."
+decode_bundle() {
+    local token="$1"
+    token="${token#hydra://}"
+    printf '%s' "$token" | base64 -d 2>/dev/null || return 1
+}
 
-    local bins=("hydra-client" "hydra")
-    local removed=0
+# ─── Server install ────────────────────────────────────────────────
+install_server() {
+    [ "$(id -u)" -eq 0 ] || warn "Server install usually needs root (for /usr/local/bin, /etc/hydra, systemd). Re-run with sudo if steps fail."
+    need_root
 
-    for bin in "${bins[@]}"; do
-        local path="$INSTALL_DIR/$bin"
-        if [ -f "$path" ]; then
-            rm -f "$path"
-            ok "Removed $path"
-            removed=$((removed + 1))
-        fi
-    done
+    scan_system
+    ensure_build_deps
+    ensure_rust
+    do_build
+    do_test
 
-    local config="$CONFIG_DIR/hydra.toml"
-    if [ -f "$config" ]; then
-        sudo rm -f "$config"
-        ok "Removed $config"
-        removed=$((removed + 1))
-    fi
+    install_bin "$SERVER_INSTALL_DIR"
+    local hydra="$SERVER_INSTALL_DIR/hydra"
+    local cfg="$SERVER_CONFIG_DIR/hydra.toml"
 
-    if [ "$removed" -eq 0 ]; then
-        warn "Nothing to uninstall"
+    # Ask for the public reachable address + port (goes into `dest`).
+    local addr
+    if [ "$NONINTERACTIVE" = 1 ]; then
+        addr="${SERVER_ADDR:-}"
+        [ -z "$addr" ] && addr="$(detect_public_ip)"
     else
-        ok "Uninstall complete ($removed items removed)"
+        local guess; guess="$(detect_public_ip)"
+        read -rp "$(echo -e "${BOLD}Server public IP or domain${NC} [${guess}]: ")" addr
+        addr="${addr:-$guess}"
+        read -rp "$(echo -e "${BOLD}REALITY port${NC} [${PORT}]: ")" p
+        PORT="${p:-$PORT}"
     fi
+    [ -z "$addr" ] && die "No server address given (set SERVER_ADDR=… for non-interactive)."
+    local dest="$addr:$PORT"
+
+    $SUDO mkdir -p "$SERVER_CONFIG_DIR"
+    if [ -f "$cfg" ]; then
+        warn "Config already exists at $cfg — keeping it (delete it to regenerate)."
+    else
+        info "Generating server config via 'hydra init' (dest=$dest)..."
+        $SUDO "$hydra" init --output "$cfg" --dest "$dest" >/dev/null
+        $SUDO chmod 600 "$cfg"
+        ok "Wrote $cfg"
+    fi
+
+    # Install the systemd service + epoch timer (server role).
+    if command -v systemctl >/dev/null 2>&1; then
+        info "Installing systemd service + timer (schedule: $SCHEDULE)..."
+        $SUDO "$hydra" service install --role server --config "$cfg" --schedule "$SCHEDULE" \
+            || warn "Service install failed (you can re-run: sudo $hydra service install --role server --config $cfg)"
+    else
+        warn "systemd not detected — skipping service install."
+        warn "Regenerate serverNames from cron/manually: $hydra server-names -c $cfg --format xray"
+    fi
+
+    print_server_summary "$hydra" "$cfg" "$dest"
+}
+
+# Extract a value for a top-level TOML key (strips base64: prefix, quotes).
+toml_val() { grep -E "^[[:space:]]*$2[[:space:]]*=" "$1" | head -1 | sed -E 's/^[^=]*=[[:space:]]*//; s/#.*$//; s/^"//; s/"[[:space:]]*$//; s/[[:space:]]*$//'; }
+
+print_server_summary() {
+    local hydra="$1" cfg="$2" dest="$3"
+    local secret salt pbk sid
+    secret="$(toml_val "$cfg" master_secret)"
+    salt="$(toml_val "$cfg" server_salt)"
+    pbk="$(grep -E '^[[:space:]]*public_key' "$cfg" | head -1 | sed -E 's/^[^=]*=[[:space:]]*//; s/#.*$//; s/"//g; s/[[:space:]]*$//')"
+    sid="$(grep -E '^[[:space:]]*short_ids' "$cfg" | head -1 | sed -E 's/.*\["?//; s/"?\].*//; s/"//g')"
+
+    echo ""
+    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  Server installed. Give these to your CLIENT.${NC}"
+    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${BOLD}Address (dest):${NC}   $dest"
+    echo -e "  ${BOLD}master_secret:${NC}    $secret"
+    echo -e "  ${BOLD}server_salt:${NC}      $salt"
+    echo -e "  ${BOLD}public_key (pbk):${NC} $pbk"
+    echo -e "  ${BOLD}short_id:${NC}         $sid"
+    echo ""
+    echo -e "  ${BOLD}One-paste connection bundle${NC} (recommended — carries the exact SNI pool):"
+    echo -e "  ${CYAN}$(make_bundle "$cfg")${NC}"
+    echo ""
+    echo -e "  ${BOLD}Xray inbound for this epoch:${NC} $hydra server-names -c $cfg --format xray"
+    echo -e "  ${BOLD}Rotate now / status:${NC}       ./setup.sh rotate   |   ./setup.sh status"
+    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+}
+
+detect_public_ip() {
+    local ip=""
+    for url in "https://api.ipify.org" "https://ifconfig.me/ip" "https://icanhazip.com"; do
+        ip="$(curl -fsS --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]')" || true
+        [ -n "$ip" ] && { echo "$ip"; return 0; }
+    done
+    hostname -I 2>/dev/null | awk '{print $1}'
+}
+
+# ─── Client install ────────────────────────────────────────────────
+install_client() {
+    scan_system
+    ensure_build_deps
+    ensure_rust
+    do_build
+    do_test
+
+    install_bin "$CLIENT_INSTALL_DIR"
+    local hydra="$CLIENT_INSTALL_DIR/hydra"
+    local cfg="$CLIENT_CONFIG_DIR/hydra.toml"
+    mkdir -p "$CLIENT_CONFIG_DIR"
+
+    if [ -f "$cfg" ]; then
+        warn "Client config already exists at $cfg."
+        if [ "$NONINTERACTIVE" != 1 ]; then
+            read -rp "  Overwrite it? [y/N] " a
+            case "$a" in [Yy]*) : ;; *) info "Keeping existing config."; print_client_summary "$hydra" "$cfg"; return 0 ;; esac
+        else
+            print_client_summary "$hydra" "$cfg"; return 0
+        fi
+    fi
+
+    if [ "$NONINTERACTIVE" = 1 ]; then
+        if [ -n "${BUNDLE:-}" ]; then
+            client_from_bundle "$BUNDLE" "$cfg"
+        else
+            die "Non-interactive client install needs BUNDLE=hydra://… (or run interactively)."
+        fi
+    else
+        echo ""
+        echo -e "${BOLD}How do you want to configure this client?${NC}"
+        echo "   1) Paste the hydra:// bundle from the server   ${GREEN}(recommended)${NC}"
+        echo "   2) Enter the values manually (address, key, salt, pbk, short-id)"
+        read -rp "  Choice [1]: " choice
+        case "${choice:-1}" in
+            2) client_manual "$hydra" "$cfg" ;;
+            *) read -rp "  Paste bundle: " b; client_from_bundle "$b" "$cfg" ;;
+        esac
+    fi
+
+    # Optional client service.
+    if command -v systemctl >/dev/null 2>&1 && [ "$NONINTERACTIVE" != 1 ]; then
+        read -rp "  Install a systemd service to run the client on boot? [y/N] " a
+        case "$a" in
+            [Yy]*)
+                need_root
+                $SUDO "$hydra" service install --role client --config "$cfg" --listen "$LISTEN" \
+                    && ok "Client service installed" || warn "Service install failed" ;;
+        esac
+    fi
+
+    print_client_summary "$hydra" "$cfg"
+}
+
+client_from_bundle() {
+    local token="$1" cfg="$2" decoded
+    decoded="$(decode_bundle "$token")" || die "Could not decode bundle (expected hydra://<base64>)."
+    printf '%s\n' "$decoded" > "$cfg"
+    chmod 600 "$cfg"
+    ok "Wrote client config from bundle → $cfg"
+}
+
+client_manual() {
+    local hydra="$1" cfg="$2"
+    read -rp "  Server IP or domain: " addr
+    read -rp "  REALITY port [${PORT}]: " p; p="${p:-$PORT}"
+    read -rp "  master_secret (base64:… or raw): " secret
+    read -rp "  server_salt (base64:… or raw):   " salt
+    read -rp "  public_key / pbk (base64):       " pbk
+    read -rp "  short_id (hex):                  " sid
+    if [ -z "$addr" ] || [ -z "$secret" ] || [ -z "$salt" ] || [ -z "$pbk" ]; then
+        die "Missing required value (address, secret, salt, and pbk are all required)."
+    fi
+
+    # Normalize base64: prefix.
+    case "$secret" in base64:*) : ;; *) secret="base64:$secret" ;; esac
+    case "$salt"   in base64:*) : ;; *) salt="base64:$salt" ;; esac
+    case "$pbk"    in base64:*) pbk="${pbk#base64:}" ;; esac
+
+    # Start from the default pool via `hydra init`, then rewrite the fields.
+    local tmp; tmp="$(mktemp)"
+    "$hydra" init --output "$tmp" --dest "$addr:$p" --force >/dev/null
+    # Substitute the shared values and drop the server private key.
+    sed -E -i \
+        -e "s|^master_secret .*|master_secret = \"$secret\"|" \
+        -e "s|^server_salt .*|server_salt   = \"$salt\"|" \
+        -e "s|^([[:space:]]*)public_key .*|\1public_key  = \"$pbk\"|" \
+        -e "s|^([[:space:]]*)short_ids .*|\1short_ids   = [\"$sid\"]|" \
+        -e "/^[[:space:]]*private_key/d" \
+        "$tmp"
+    mv "$tmp" "$cfg"; chmod 600 "$cfg"
+    ok "Wrote client config → $cfg"
+    warn "Manual mode uses the DEFAULT SNI pool. It must match the server's pool —"
+    warn "if the server customized its pool, use the hydra:// bundle instead."
+}
+
+print_client_summary() {
+    local hydra="$1" cfg="$2"
+    echo ""
+    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  Client installed.${NC}"
+    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${BOLD}Config:${NC} $cfg"
+    echo -e "  ${BOLD}Run:${NC}    $hydra serve -c $cfg --listen $LISTEN"
+    echo -e "  Point your app's SOCKS5 proxy at ${BOLD}$LISTEN${NC}."
+    echo -e "  With real DNS + BoringSSL: rebuild with ${BOLD}--features full${NC}."
+    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+}
+
+# ─── status / rotate / bundle / uninstall ──────────────────────────
+find_hydra() {
+    for c in "$SERVER_INSTALL_DIR/hydra" "$CLIENT_INSTALL_DIR/hydra" "$REPO_ROOT/target/release/hydra"; do
+        [ -x "$c" ] && { echo "$c"; return 0; }
+    done
+    command -v hydra 2>/dev/null || echo ""
+}
+find_config() {
+    for c in "$SERVER_CONFIG_DIR/hydra.toml" "$CLIENT_CONFIG_DIR/hydra.toml"; do
+        [ -f "$c" ] && { echo "$c"; return 0; }
+    done
+    echo ""
 }
 
 do_status() {
-    echo ""
-    echo -e "${BOLD}REALITY-Hydra Status${NC}"
-    echo -e "${CYAN}────────────────────────────────────────${NC}"
-
-    echo -e "\n${BOLD}Binaries:${NC}"
-    for bin in hydra-client hydra; do
-        local path="$INSTALL_DIR/$bin"
-        if [ -x "$path" ]; then
-            ok "$path"
-        else
-            err "$path (not installed)"
-        fi
-    done
-
+    banner
+    local hydra cfg; hydra="$(find_hydra)"; cfg="$(find_config)"
+    echo -e "\n${BOLD}Binary:${NC}"
+    [ -n "$hydra" ] && ok "$hydra ($("$hydra" --version 2>/dev/null | head -1))" || err "hydra not installed"
     echo -e "\n${BOLD}Config:${NC}"
-    local config="$CONFIG_DIR/hydra.toml"
-    if [ -f "$config" ]; then
-        ok "$config"
-    else
-        err "$config (not installed)"
+    [ -n "$cfg" ] && ok "$cfg" || err "no hydra.toml found"
+    echo -e "\n${BOLD}Toolchain:${NC}"
+    command -v rustc >/dev/null 2>&1 && ok "$(rustc --version)" || err "rustc not installed"
+    if command -v systemctl >/dev/null 2>&1; then
+        echo -e "\n${BOLD}Services:${NC}"
+        for u in hydra-server.timer hydra-client.service; do
+            if systemctl list-unit-files 2>/dev/null | grep -q "^$u"; then
+                ok "$u — $(systemctl is-active "$u" 2>/dev/null || echo inactive)"
+            fi
+        done
     fi
-
-    echo -e "\n${BOLD}Rust toolchain:${NC}"
-    if command -v rustc &>/dev/null; then
-        ok "$(rustc --version)"
-        ok "$(cargo --version)"
-    else
-        err "not installed"
-    fi
-
-    echo -e "\n${BOLD}Build artifacts:${NC}"
-    if [ -f "$REPO_ROOT/target/release/hydra-client" ]; then
-        ok "target/release/hydra-client ($(du -h "$REPO_ROOT/target/release/hydra-client" | cut -f1))"
-    else
-        warn "target/release/hydra-client (not built)"
-    fi
-    if [ -f "$REPO_ROOT/target/release/hydra" ]; then
-        ok "target/release/hydra ($(du -h "$REPO_ROOT/target/release/hydra" | cut -f1))"
-    else
-        warn "target/release/hydra (not built)"
+    if [ -n "$hydra" ] && [ -n "$cfg" ]; then
+        echo -e "\n${BOLD}Current epoch serverNames:${NC}"
+        "$hydra" server-names -c "$cfg" 2>/dev/null | sed 's/^/  /' || warn "could not derive (client config?)"
     fi
     echo ""
 }
 
-# ─── Main ──────────────────────────────────────────────────────────
+do_rotate() {
+    local hydra cfg; hydra="$(find_hydra)"; cfg="$(find_config)"
+    [ -n "$hydra" ] || die "hydra not installed."
+    [ -n "$cfg" ] || die "no hydra.toml found."
+    echo -e "${BOLD}Lines:${NC}";  "$hydra" server-names -c "$cfg"
+    echo -e "\n${BOLD}JSON:${NC}";  "$hydra" server-names -c "$cfg" --format json
+    echo -e "\n${BOLD}Xray:${NC}";  "$hydra" server-names -c "$cfg" --format xray
+    echo ""
+    warn "Reload Xray with the new serverNames (e.g. systemctl reload xray)."
+}
+
+do_bundle() {
+    local cfg="$SERVER_CONFIG_DIR/hydra.toml"
+    [ -f "$cfg" ] || cfg="$(find_config)"
+    [ -n "$cfg" ] && [ -f "$cfg" ] || die "no server hydra.toml found."
+    echo -e "${BOLD}Connection bundle (paste into the client):${NC}"
+    make_bundle "$cfg"
+}
+
+do_uninstall() {
+    banner
+    info "Uninstalling REALITY-Hydra..."
+    need_root
+    if command -v systemctl >/dev/null 2>&1; then
+        for u in hydra-server.timer hydra-server.service hydra-client.service; do
+            systemctl list-unit-files 2>/dev/null | grep -q "^$u" && {
+                $SUDO systemctl disable --now "$u" 2>/dev/null || true
+                $SUDO rm -f "/etc/systemd/system/$u"
+                ok "removed $u"
+            }
+        done
+        $SUDO systemctl daemon-reload 2>/dev/null || true
+    fi
+    for b in "$SERVER_INSTALL_DIR/hydra" "$CLIENT_INSTALL_DIR/hydra"; do
+        [ -f "$b" ] && { $SUDO rm -f "$b"; ok "removed $b"; }
+    done
+    for c in "$SERVER_CONFIG_DIR/hydra.toml" "$CLIENT_CONFIG_DIR/hydra.toml"; do
+        if [ -f "$c" ]; then
+            if [ "$NONINTERACTIVE" != 1 ]; then
+                read -rp "  Remove config $c? [y/N] " a
+                case "$a" in [Yy]*) $SUDO rm -f "$c"; ok "removed $c" ;; *) info "kept $c" ;; esac
+            else
+                info "kept $c (set ASSUME_YES=1 and remove manually if desired)"
+            fi
+        fi
+    done
+    ok "Uninstall complete"
+}
+
+# ─── Interactive menu (3x-ui style) ────────────────────────────────
+menu() {
+    banner
+    scan_system
+    echo ""
+    echo -e "  ${BOLD}1)${NC} Install ${GREEN}server${NC}   (Linux only — generates keys, prints bundle)"
+    echo -e "  ${BOLD}2)${NC} Install ${GREEN}client${NC}   (paste the server's bundle)"
+    echo -e "  ${BOLD}3)${NC} Status"
+    echo -e "  ${BOLD}4)${NC} Rotate serverNames (server)"
+    echo -e "  ${BOLD}5)${NC} Show connection bundle (server)"
+    echo -e "  ${BOLD}6)${NC} Uninstall"
+    echo -e "  ${BOLD}0)${NC} Exit"
+    echo ""
+    read -rp "  Select [0-6]: " c
+    case "$c" in
+        1) ROLE="server"; install_server ;;
+        2) ROLE="client"; install_client ;;
+        3) do_status ;;
+        4) do_rotate ;;
+        5) do_bundle ;;
+        6) do_uninstall ;;
+        0|"") exit 0 ;;
+        *) err "Invalid choice"; exit 1 ;;
+    esac
+}
+
+# ─── Usage ─────────────────────────────────────────────────────────
+usage() {
+    banner
+    cat <<EOF
+
+USAGE:  ./setup.sh [COMMAND] [OPTIONS]
+
+COMMANDS:
+    (none)        Interactive menu
+    server        Install & configure the SERVER (Linux, root)
+    client        Install & configure the CLIENT
+    status        Show binary, config, services, current epoch
+    rotate        Print this epoch's serverNames (lines/JSON/Xray)
+    bundle        Print the hydra:// connection bundle (server)
+    uninstall     Remove binaries, config, and services
+
+OPTIONS:
+    -f, --features F     Cargo features (e.g. full, live-dns) [default: none]
+        --port N         REALITY port for the server dest [default: 443]
+        --listen ADDR    Client SOCKS5 listen address [default: 127.0.0.1:1080]
+        --schedule EXPR  systemd OnCalendar for the server timer [default: hourly]
+        --server-addr A  Server IP/domain (non-interactive server install)
+        --bundle TOKEN   hydra:// bundle (non-interactive client install)
+    -s, --skip-tests     Skip the test step
+    -b, --skip-build     Skip the build step
+    -y, --yes            Assume yes (install deps without asking)
+    -h, --help           Show this help
+    -V, --version        Show version
+
+ENVIRONMENT (non-interactive):
+    HYDRA_NONINTERACTIVE=1, SERVER_ADDR=…, BUNDLE=hydra://…, ASSUME_YES=1,
+    FEATURES=…, PORT=…, LISTEN=…, SCHEDULE=…
+
+FLOW:
+    1. On the SERVER:  sudo ./setup.sh server     → copy the printed bundle
+    2. On the CLIENT:  ./setup.sh client          → paste the bundle
+EOF
+}
+
+# ─── Arg parsing ───────────────────────────────────────────────────
+CMD=""
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            server|client|status|rotate|bundle|uninstall) CMD="$1"; shift ;;
+            -f|--features) FEATURES="${2:?}"; shift 2 ;;
+            --features=*)  FEATURES="${1#*=}"; shift ;;
+            --port) PORT="${2:?}"; shift 2 ;;
+            --port=*) PORT="${1#*=}"; shift ;;
+            --listen) LISTEN="${2:?}"; shift 2 ;;
+            --listen=*) LISTEN="${1#*=}"; shift ;;
+            --schedule) SCHEDULE="${2:?}"; shift 2 ;;
+            --schedule=*) SCHEDULE="${1#*=}"; shift ;;
+            --server-addr) SERVER_ADDR="${2:?}"; shift 2 ;;
+            --server-addr=*) SERVER_ADDR="${1#*=}"; shift ;;
+            --bundle) BUNDLE="${2:?}"; shift 2 ;;
+            --bundle=*) BUNDLE="${1#*=}"; shift ;;
+            -s|--skip-tests) SKIP_TESTS=1; shift ;;
+            -b|--skip-build) SKIP_BUILD=1; shift ;;
+            -y|--yes) ASSUME_YES=1; shift ;;
+            -h|--help) usage; exit 0 ;;
+            -V|--version) echo "setup.sh v${VERSION}"; exit 0 ;;
+            *) die "Unknown argument: $1 (use --help)" ;;
+        esac
+    done
+}
 
 main() {
     parse_args "$@"
-
-    # Default to full pipeline if no actions specified
-    if [ ${#ACTIONS[@]} -eq 0 ]; then
-        ACTIONS=(--check --build --test --install --config)
-    fi
-
-    echo -e "${CYAN}════════════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}  REALITY-Hydra Setup${NC} ${CYAN}v${VERSION}${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════════════════════${NC}"
-    echo ""
-
-    cd "$REPO_ROOT"
-
-    for action in "${ACTIONS[@]}"; do
-        case "$action" in
-            --check)    check_rust ;;
-            --build)    do_build ;;
-            --test)     do_test ;;
-            --install)  do_install ;;
-            --config)   do_config ;;
-            --uninstall) do_uninstall; echo ""; return ;;
-            --status)   do_status; return ;;
-        esac
-        echo ""
-    done
-
-    # Print usage summary after full pipeline
-    echo -e "${CYAN}════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}  REALITY-Hydra installed successfully!${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════════════════════${NC}"
-    echo ""
-    echo "  Binaries:  $INSTALL_DIR/{hydra-client,hydra}"
-    echo "  Config:    $CONFIG_DIR/hydra.toml"
-    echo ""
-    echo -e "  ${BOLD}CLIENT:${NC}"
-    echo "    hydra-client -c $CONFIG_DIR/hydra.toml --listen 127.0.0.1:1080"
-    echo ""
-    echo -e "  ${BOLD}SERVER:${NC}"
-    echo "    hydra -c $CONFIG_DIR/hydra.toml"
-    echo "    hydra -c $CONFIG_DIR/hydra.toml --format xray"
-    echo ""
+    case "$CMD" in
+        server)    banner; install_server ;;
+        client)    banner; install_client ;;
+        status)    do_status ;;
+        rotate)    do_rotate ;;
+        bundle)    do_bundle ;;
+        uninstall) do_uninstall ;;
+        "")        if [ "$NONINTERACTIVE" = 1 ]; then usage; else menu; fi ;;
+    esac
 }
 
 main "$@"

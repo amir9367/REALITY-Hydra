@@ -78,9 +78,6 @@ weight = 5.0
 [[pool]]
 sni    = "www.wikipedia.org"
 weight = 5.0
-[[pool]]
-sni    = "play.google.com"
-weight = 4.5
 
 # Tier 4 — moderate (weight 2-4)
 [[pool]]

@@ -30,8 +30,10 @@ pub const CHROME_CIPHER_SUITES: &[u16] = &[
 
 /// Supported groups (key-share groups) in Chrome 120+ order.
 ///
-/// BoringSSL prepends GREASE automatically when the cipher list contains a
-/// GREASE value; we do not include it here.
+/// GREASE is not listed here: BoringSSL inserts the GREASE group (and GREASE
+/// cipher/extension) itself when GREASE is enabled on the connector via
+/// `set_grease_enabled(true)` — see [`crate::client`]. Listing a GREASE value
+/// manually would double it.
 pub const CHROME_GROUPS: &[u16] = &[
     0x001d, // x25519
     0x0017, // secp256r1 (P-256)
@@ -52,6 +54,11 @@ pub const CHROME_SIG_ALGS: &[u16] = &[
 ];
 
 /// ALPN protocols in Chrome order: `h2` first, then `http/1.1`.
+///
+/// REALITY only works against TLS 1.3 + h2 targets (§7 P8), so `h2` must lead.
+/// Chrome also sends ALPS (`application_settings`) advertising `h2`; stock
+/// `boring` has no ALPS setter, so [`crate::client`] documents that as a residual
+/// JA4 gap versus a real capture.
 pub const CHROME_ALPN: &[&[u8]] = &[b"h2", b"http/1.1"];
 
 /// A high-level fingerprint selector. In the future this can grow to include

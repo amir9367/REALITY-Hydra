@@ -17,6 +17,47 @@ use crate::entry::{MasterList, PoolEntry};
 use crate::error::PoolError;
 use crate::kdf::{DOMAIN_TAG, SALT_LEN, SECRET_LEN};
 
+/// The X25519 key length used by REALITY (`pbk` / `privateKey`).
+pub const REALITY_KEY_LEN: usize = 32;
+/// The REALITY protocol `short_id` byte limit.
+const MAX_SHORT_ID_LEN: usize = 32;
+
+/// REALITY handshake keys, parsed from the optional `[reality]` table.
+///
+/// A server config carries `private_key` (kept secret) plus `public_key`; a
+/// client config needs only `public_key` (the `pbk`) and `short_ids`. This is the
+/// bridge between the pool engine and the `reality-tls` layer — `hydra init`
+/// generates it, `hydra server-names --format xray` renders it, and the client
+/// pipeline consumes it.
+pub struct RealitySettings {
+    /// Server X25519 private key (32 B). Present on servers, absent on clients.
+    private_key: Option<SecretBox<[u8; REALITY_KEY_LEN]>>,
+    /// Server X25519 public key / client `pbk` (32 B).
+    pub public_key: [u8; REALITY_KEY_LEN],
+    /// Accepted short IDs (hex-decoded, 0–32 B each). Empty means the empty `""`.
+    pub short_ids: Vec<Vec<u8>>,
+    /// uTLS fingerprint to impersonate (e.g. `"chrome"`).
+    pub fingerprint: String,
+}
+
+impl RealitySettings {
+    /// Borrow the server private key, if this config carries one. Never log it.
+    pub fn private_key(&self) -> Option<&[u8; REALITY_KEY_LEN]> {
+        self.private_key.as_ref().map(|s| s.expose_secret())
+    }
+}
+
+impl std::fmt::Debug for RealitySettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RealitySettings")
+            .field("public_key", &self.public_key)
+            .field("short_ids", &self.short_ids)
+            .field("fingerprint", &self.fingerprint)
+            .field("has_private_key", &self.private_key.is_some())
+            .finish()
+    }
+}
+
 /// Fully-parsed, validated engine configuration.
 ///
 /// The master secret is wrapped in a [`SecretBox`], which keeps it out of
@@ -31,6 +72,8 @@ pub struct HydraConfig {
     /// Network fields for later phases (unused in Phase 1).
     pub dest: Option<String>,
     pub coherence_cidrs: Vec<String>,
+    /// REALITY handshake keys (optional `[reality]` table).
+    pub reality: Option<RealitySettings>,
 }
 
 impl HydraConfig {
@@ -73,6 +116,24 @@ struct RawConfig {
     coherence_cidrs: Vec<String>,
     #[serde(default)]
     pool: Vec<PoolEntry>,
+    #[serde(default)]
+    reality: Option<RawReality>,
+}
+
+/// On-disk shape of the optional `[reality]` table.
+#[derive(Deserialize)]
+struct RawReality {
+    #[serde(default)]
+    private_key: Option<String>,
+    public_key: String,
+    #[serde(default)]
+    short_ids: Vec<String>,
+    #[serde(default = "default_fingerprint")]
+    fingerprint: String,
+}
+
+fn default_fingerprint() -> String {
+    "chrome".to_string()
 }
 
 fn default_format() -> String {
@@ -132,6 +193,8 @@ impl RawConfig {
         let epoch_len = parse_duration(&self.epoch_len)?;
         let master_list = MasterList::new(self.pool)?;
 
+        let reality = self.reality.map(RawReality::into_settings).transpose()?;
+
         Ok(HydraConfig {
             master_secret,
             server_salt,
@@ -140,8 +203,78 @@ impl RawConfig {
             master_list,
             dest: self.dest,
             coherence_cidrs: self.coherence_cidrs,
+            reality,
         })
     }
+}
+
+impl RawReality {
+    fn into_settings(self) -> Result<RealitySettings, PoolError> {
+        let public_key = decode_key("public_key", &self.public_key)?;
+
+        let private_key = match self.private_key {
+            Some(ref pk) => {
+                let bytes = decode_key("private_key", pk)?;
+                let secret = SecretBox::new(Box::new(bytes));
+                Some(secret)
+            }
+            None => None,
+        };
+
+        let mut short_ids = Vec::with_capacity(self.short_ids.len());
+        for (index, hex) in self.short_ids.iter().enumerate() {
+            let bytes = decode_hex(hex).map_err(|reason| PoolError::BadShortIdHex { index, reason })?;
+            if bytes.len() > MAX_SHORT_ID_LEN {
+                return Err(PoolError::ShortIdTooLong {
+                    index,
+                    actual: bytes.len(),
+                });
+            }
+            short_ids.push(bytes);
+        }
+
+        Ok(RealitySettings {
+            private_key,
+            public_key,
+            short_ids,
+            fingerprint: self.fingerprint,
+        })
+    }
+}
+
+/// Decode a base64 X25519 key and require exactly [`REALITY_KEY_LEN`] bytes.
+fn decode_key(field: &'static str, value: &str) -> Result<[u8; REALITY_KEY_LEN], PoolError> {
+    let bytes = decode_b64(field, value)?;
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| PoolError::BadRealityKeyLen {
+            field,
+            expected: REALITY_KEY_LEN,
+            actual: bytes.len(),
+        })
+}
+
+/// Decode a hex string (even length, `0-9a-fA-F`) into bytes.
+fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
+    let s = s.trim();
+    if s.len() % 2 != 0 {
+        return Err(format!("odd length ({} chars)", s.len()));
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let bytes = s.as_bytes();
+    let nibble = |c: u8| -> Result<u8, String> {
+        match c {
+            b'0'..=b'9' => Ok(c - b'0'),
+            b'a'..=b'f' => Ok(c - b'a' + 10),
+            b'A'..=b'F' => Ok(c - b'A' + 10),
+            other => Err(format!("invalid hex char {:?}", other as char)),
+        }
+    };
+    for pair in bytes.chunks_exact(2) {
+        out.push((nibble(pair[0])? << 4) | nibble(pair[1])?);
+    }
+    Ok(out)
 }
 
 /// Decode a base64 value that may carry an optional `base64:` prefix (as written

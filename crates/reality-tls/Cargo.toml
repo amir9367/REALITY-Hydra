@@ -22,7 +22,9 @@ thiserror.workspace = true
 tokio = { workspace = true }
 # BoringSSL impersonation (Chrome fingerprint) — off by default.
 boring = { workspace = true, optional = true }
+# Async TLS handshake driver for the `boring` connector over a tokio TcpStream.
+tokio-boring = { version = "4", optional = true }
 
 [features]
 default = []
-boring-impersonate = ["dep:boring"]
+boring-impersonate = ["dep:boring", "dep:tokio-boring"]

@@ -7,6 +7,7 @@
 //!   `serverNames` filled from the pool and `dest` from the config (REALITY.md
 //!   §11). This is the artifact a server operator regenerates each epoch.
 
+use base64::Engine as _;
 use pool_engine::{ActivePool, Epoch, HydraConfig};
 use serde_json::{Value, json};
 
@@ -54,6 +55,27 @@ pub fn render_xray(cfg: &HydraConfig, pool: &ActivePool, epoch: Epoch) -> Result
         .clone()
         .unwrap_or_else(|| DEST_PLACEHOLDER.to_string());
 
+    // Pull the REALITY keys from the config's `[reality]` table when present
+    // (populated by `hydra init`); otherwise emit obvious placeholders.
+    let (private_key, short_ids) = match &cfg.reality {
+        Some(r) => {
+            let pk = r.private_key().map_or_else(
+                || "SET-privateKey-IN-[reality]".to_string(),
+                |bytes| base64::engine::general_purpose::STANDARD.encode(bytes),
+            );
+            let sids: Vec<String> = if r.short_ids.is_empty() {
+                vec![String::new()]
+            } else {
+                r.short_ids
+                    .iter()
+                    .map(|sid| sid.iter().map(|b| format!("{b:02x}")).collect())
+                    .collect()
+            };
+            (pk, sids)
+        }
+        None => ("SET-from-`xray x25519`".to_string(), vec![String::new()]),
+    };
+
     let inbound = json!({
         "_hydra": {
             "note": "REALITY-Hydra Phase 6: regenerate each epoch from hydra.toml",
@@ -74,8 +96,8 @@ pub fn render_xray(cfg: &HydraConfig, pool: &ActivePool, epoch: Epoch) -> Result
             "realitySettings": {
                 "dest": dest,
                 "serverNames": server_names,
-                "privateKey": "SET-from-`xray x25519`",
-                "shortIds": [""],
+                "privateKey": private_key,
+                "shortIds": short_ids,
                 "maxTimeDiff": 60000
             }
         }

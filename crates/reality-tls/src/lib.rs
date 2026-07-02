@@ -1,58 +1,64 @@
 //! # reality-tls — REALITY-Hydra Phase 4
 //!
-//! The camouflaged TLS client: produces a ClientHello that byte-matches a real
-//! browser (Chrome 120+) and embeds the REALITY X25519 authentication proof in
-//! the TLS `session_id` extension (REALITY.md §7 P7).
+//! The camouflaged TLS client layer: a ClientHello that byte-matches a real
+//! browser (Chrome 120+) plus the REALITY X25519 authentication proof sealed
+//! into the TLS `session_id` field (REALITY.md §1, §7 P7).
 //!
-//! ## What this crate does
+//! ## What this crate provides
 //!
-//! 1. **BoringSSL impersonation** (feature `boring-impersonate`) — builds a
-//!    `SslConnector` whose ClientHello matches Chrome's cipher order, extension
-//!    layout, key-share groups, signature algorithms, ALPN, ALPS, GREASE, and
-//!    compress_certificate. The goal is JA3/JA4 equivalence with a real Chrome
-//!    capture.
+//! 1. **Wire-accurate REALITY auth** ([`auth`]) — [`RealityAuth::seal`] builds the
+//!    exact 32-byte `session_id` Xray-core's REALITY expects: the ephemeral X25519
+//!    public key is the TLS `key_share`, the AEAD key is
+//!    `HKDF-SHA256(shared, salt=client_random[0..20], info="REALITY")`, the nonce
+//!    is `client_random[20..32]`, and the whole ClientHello is the AEAD associated
+//!    data. [`RealityAuth::open`] is the matching server-side verification, so the
+//!    round-trip is provable offline without a live server.
 //!
-//! 2. **REALITY auth embedding** — generates an ephemeral X25519 keypair,
-//!    computes the shared secret with the server's public key, encrypts
-//!    `(client_pub || timestamp || short_id)` with AES-256-GCM, and places the
-//!    ciphertext in the `session_id` field of the ClientHello. Only the real
-//!    server (holding the matching `privateKey`) can decrypt and verify it.
+//! 2. **Chrome fingerprint data** ([`fingerprint`]) — cipher order, key-share
+//!    groups, signature algorithms, and ALPN targeting Chrome 120+ JA3/JA4.
 //!
-//! 3. **`xtls-rprx-vision` flow** — the Vision flow (REALITY.md §1/P10) is
-//!    configured at the Xray protocol layer, not the TLS layer, so it is
-//!    orthogonal to this crate. A production client would pair this TLS layer
-//!    with a Vision-aware framing layer.
+//! 3. **A `boring` connector + injection seam** ([`client`], feature
+//!    `boring-impersonate`) — a compile-checked Chrome-fingerprinted connector and
+//!    the [`client::RealityInjector`] trait where a REALITY-patched TLS stack
+//!    installs the sealed `session_id`. See that module for why stock BoringSSL
+//!    cannot do this step itself.
 //!
 //! ## Offline by default
 //!
-//! The `auth`, `fingerprint`, `config`, and `error` modules are pure logic and
-//! compile without a BoringSSL toolchain. The `client` module (the real
-//! connector) is behind the `boring-impersonate` feature, matching the
-//! workspace's "offline by default" design (REALITY.md §7 P7).
+//! The [`auth`], [`fingerprint`], [`config`], and [`error`] modules are pure logic
+//! and compile without a BoringSSL toolchain. The [`client`] module is behind the
+//! `boring-impersonate` feature (REALITY.md §7 P7).
 //!
 //! ## Quick tour (auth only, no BoringSSL needed)
 //!
 //! ```
-//! use reality_tls::{RealityAuth, RealityConfig};
+//! use reality_tls::auth::{RealityAuth, DEFAULT_VERSION};
+//! use reality_tls::{RealityConfig};
 //! use reality_tls::fingerprint::Fingerprint;
 //!
 //! let config = RealityConfig::new(
-//!     [0xAB; 32],            // server public key (pbk)
+//!     [0xAB; 32],             // server public key (pbk)
 //!     vec![vec![0x01, 0x02]], // short_ids (sid)
 //!     Fingerprint::Chrome,
 //! )
 //! .unwrap();
 //!
-//! // Build the auth token (fresh ephemeral keypair + AES-GCM encryption).
-//! let auth = RealityAuth::build(
+//! // In a real client these come from the TLS stack's actual ClientHello.
+//! let client_random = [0u8; 32];
+//! let client_hello_raw = b"...serialized ClientHello...";
+//!
+//! let auth = RealityAuth::seal(
 //!     &config.server_public_key,
 //!     config.pick_short_id(),
+//!     config.version,
 //!     1_700_000_000, // UNIX timestamp
+//!     &client_random,
+//!     client_hello_raw,
 //! )
 //! .unwrap();
 //!
-//! assert_eq!(auth.client_public.len(), 32);
-//! assert!(!auth.session_id.is_empty());
+//! assert_eq!(auth.client_public.len(), 32);   // this is the TLS key_share
+//! assert_eq!(auth.session_id.len(), 32);      // exactly the TLS session_id limit
 //! ```
 
 pub mod auth;
@@ -63,10 +69,10 @@ pub mod fingerprint;
 #[cfg(feature = "boring-impersonate")]
 pub mod client;
 
-pub use auth::RealityAuth;
+pub use auth::{AuthPayload, RealityAuth};
 pub use config::RealityConfig;
 pub use error::RealityError;
 pub use fingerprint::Fingerprint;
 
 #[cfg(feature = "boring-impersonate")]
-pub use client::RealityClient;
+pub use client::{RealityClient, RealityInjector, UnsupportedInjector};

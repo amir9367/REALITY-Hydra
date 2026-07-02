@@ -1,23 +1,38 @@
 <#
 .SYNOPSIS
-    REALITY-Hydra Windows client setup - builds, tests, and installs hydra-client.
+    REALITY-Hydra Windows client installer (Windows 10 / 11 only).
 
 .DESCRIPTION
-    Builds only the client-side binary (hydra-client) and its dependencies.
-    Server-side crates (hydra-cli, health-checker) are excluded.
+    Installs and manages the CLIENT side of REALITY-Hydra on Windows. The server
+    is Linux-only (use setup.sh on the server); this script never builds or runs
+    a server.
 
-.PARAMETER Action
-    One or more actions: Check, Build, Test, Install, Config, Uninstall, Status.
-    Default (no action): runs the full pipeline Check, Build, Test, Install, Config.
+    Intended flow: run the SERVER install on Linux first - it prints a
+    `hydra://...` connection bundle (plus the salt, key, and address). Then run
+    this script and paste the bundle (or enter the values manually).
+
+    Run with no parameters for the interactive menu, or pass -Command:
+        .\setup.ps1 -Command client      # install & configure the client
+        .\setup.ps1 -Command status
+        .\setup.ps1 -Command uninstall
+
+.PARAMETER Command
+    client | status | uninstall. Omit for the interactive menu.
+
+.PARAMETER Bundle
+    A hydra://<base64> connection bundle (non-interactive install).
 
 .PARAMETER Features
-    Cargo features to enable. Default: "full".
+    Cargo features (e.g. "full", "live-dns"). "full" needs cmake (BoringSSL).
 
 .PARAMETER InstallDir
-    Directory to install the binary. Default: "$env:USERPROFILE\.local\bin".
+    Where to install hydra.exe. Default: %USERPROFILE%\.local\bin
 
 .PARAMETER ConfigDir
-    Directory to install the sample config. Default: "$env:USERPROFILE\.config\hydra".
+    Where to write hydra.toml. Default: %USERPROFILE%\.config\hydra
+
+.PARAMETER Listen
+    SOCKS5 listen address. Default: 127.0.0.1:1080
 
 .PARAMETER SkipTests
     Skip the test suite.
@@ -25,425 +40,332 @@
 .PARAMETER SkipBuild
     Skip the build step.
 
-.PARAMETER NoConfig
-    Skip config installation.
-
-.PARAMETER VerboseOutput
-    Verbose cargo output.
-
 .EXAMPLE
     .\setup.ps1
-    # Full install: check, build, test, install, config
+    # Interactive menu
 
 .EXAMPLE
-    .\setup.ps1 -Action Build,Test
-    # Build and test only
-
-.EXAMPLE
-    .\setup.ps1 -Action Install -SkipBuild -SkipTests
-    # Install pre-built binary only
-
-.EXAMPLE
-    .\setup.ps1 -Action Status
-    # Show what's installed
-
-.EXAMPLE
-    .\setup.ps1 -Action Uninstall
-    # Remove installed binary and config
+    .\setup.ps1 -Command client -Bundle "hydra://..."
+    # Non-interactive install from a bundle
 #>
 
 [CmdletBinding()]
 param(
-    [ValidateSet("Check","Build","Test","Install","Config","Uninstall","Status")]
-    [string[]]$Action,
+    [ValidateSet("client","status","uninstall")]
+    [string]$Command,
 
+    [string]$Bundle,
     [string]$Features = "",
-
     [string]$InstallDir,
     [string]$ConfigDir,
-
+    [string]$Listen = "127.0.0.1:1080",
     [switch]$SkipTests,
-    [switch]$SkipBuild,
-    [switch]$NoConfig,
-    [switch]$VerboseOutput
+    [switch]$SkipBuild
 )
 
-$ErrorActionPreference = "Continue"
-$Version = "0.1.0"
+$ErrorActionPreference = "Stop"
+$Version = "0.3.0"
 $RepoRoot = $PSScriptRoot
 
-# Set defaults here to avoid encoding issues with $env: in param block
 if (-not $InstallDir) { $InstallDir = Join-Path $env:USERPROFILE ".local\bin" }
 if (-not $ConfigDir)  { $ConfigDir  = Join-Path $env:USERPROFILE ".config\hydra" }
 
-# --- Colored output helpers ---
+# --- Output helpers ---
+function Write-Step { param([string]$m) Write-Host ([char]0x25B8 + " $m") -ForegroundColor Cyan }
+function Write-Ok   { param([string]$m) Write-Host ([char]0x2714 + " $m") -ForegroundColor Green }
+function Write-WarnMsg { param([string]$m) Write-Host ([char]0x26A0 + " $m") -ForegroundColor Yellow }
+function Write-ErrMsg  { param([string]$m) Write-Host ([char]0x2718 + " $m") -ForegroundColor Red }
+function Write-Banner {
+    Write-Host "============================================================" -ForegroundColor Cyan
+    Write-Host "  REALITY-Hydra Client Installer  v$Version  (Windows)" -ForegroundColor Cyan
+    Write-Host "============================================================" -ForegroundColor Cyan
+}
+function Die { param([string]$m) Write-ErrMsg $m; exit 1 }
 
-function Write-Step {
-    param([string]$msg)
-    Write-Host ([char]0x25B8 + " $msg") -ForegroundColor Cyan
+# --- Windows 10/11 gate ---
+function Test-WindowsVersion {
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+    $build = 0
+    try { $build = [int]([System.Environment]::OSVersion.Version.Build) } catch {}
+    $caption = if ($os) { $os.Caption } else { "Windows" }
+
+    # Windows 10 = build 10240+, Windows 11 = build 22000+. Anything below 10 is out.
+    if ([System.Environment]::OSVersion.Version.Major -lt 10 -or $build -lt 10240) {
+        Die "Unsupported Windows. This client requires Windows 10 or 11 (found: $caption, build $build)."
+    }
+    $name = if ($build -ge 22000) { "Windows 11" } else { "Windows 10" }
+    Write-Ok "$name (build $build) - supported"
 }
 
-function Write-Ok {
-    param([string]$msg)
-    Write-Host ([char]0x2714 + " $msg") -ForegroundColor Green
-}
-
-function Write-WarnMsg {
-    param([string]$msg)
-    Write-Host ([char]0x26A0 + " $msg") -ForegroundColor Yellow
-}
-
-function Write-ErrMsg {
-    param([string]$msg)
-    Write-Host ([char]0x2718 + " $msg") -ForegroundColor Red
-}
-
-# --- Help ---
-
-function Show-Usage {
-    Write-Host "REALITY-Hydra Windows Client Setup  v$Version" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "USAGE:" -ForegroundColor White
-    Write-Host "    .\setup.ps1 [OPTIONS]"
-    Write-Host ""
-    Write-Host "ACTIONS (pass via -Action):"
-    Write-Host "    (none)          Full pipeline: Check > Build > Test > Install > Config"
-    Write-Host "    Check           Check prerequisites (Rust toolchain)"
-    Write-Host "    Build           Build hydra-client (release mode)"
-    Write-Host "    Test            Run tests, clippy, and fmt checks"
-    Write-Host "    Install         Copy binary to InstallDir"
-    Write-Host "    Config          Install sample config to ConfigDir"
-    Write-Host "    Uninstall       Remove installed binary and config"
-    Write-Host "    Status          Show installed files and toolchain info"
-    Write-Host ""
-    Write-Host "OPTIONS:"
-    Write-Host "    -Features FEAT       Cargo features (default: full)"
-    Write-Host "    -InstallDir DIR      Binary install dir (default: ~\.local\bin)"
-    Write-Host "    -ConfigDir DIR       Config install dir (default: ~\.config\hydra)"
-    Write-Host "    -SkipTests           Skip test suite"
-    Write-Host "    -SkipBuild           Skip build step"
-    Write-Host "    -NoConfig            Skip config installation"
-    Write-Host "    -VerboseOutput       Verbose cargo output"
-    Write-Host ""
-}
-
-# --- Prerequisite check ---
-
-function Test-RustToolchain {
-    Write-Step "Checking Rust toolchain..."
-
-    # Ensure cargo is in PATH
+# --- Toolchain ---
+function Add-CargoToPath {
     $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
-    if (Test-Path $cargoBin) {
-        if ($env:PATH -notlike "*$cargoBin*") {
-            $env:PATH = $cargoBin + ";" + $env:PATH
+    if ((Test-Path $cargoBin) -and ($env:PATH -notlike "*$cargoBin*")) {
+        $env:PATH = "$cargoBin;$env:PATH"
+    }
+}
+
+function Install-Rust {
+    Add-CargoToPath
+    if (Get-Command cargo -ErrorAction SilentlyContinue) {
+        $ver = (cmd /c "rustc --version 2>nul")
+        $m = [regex]::Match($ver, '(\d+)\.(\d+)\.(\d+)')
+        if ($m.Success) {
+            $maj = [int]$m.Groups[1].Value; $min = [int]$m.Groups[2].Value
+            if ($maj -lt 1 -or ($maj -eq 1 -and $min -lt 88)) {
+                Write-WarnMsg "Rust $($m.Value) < 1.88 - updating..."
+                & rustup update stable; & rustup default stable
+            }
         }
+        Write-Ok (cmd /c "rustc --version 2>nul")
+        Write-Ok (cmd /c "cargo --version 2>nul")
+        return
     }
 
-    $hasRustup = $null -ne (Get-Command rustup -ErrorAction SilentlyContinue)
-    $hasCargo  = $null -ne (Get-Command cargo  -ErrorAction SilentlyContinue)
-
-    if ($hasRustup) {
-        $rv = (cmd /c "rustup --version 2>nul") -replace "`n.*",""
-        Write-Ok "rustup $rv"
-    } else {
-        Write-WarnMsg "Rust not found. Installing via rustup-init..."
+    Write-WarnMsg "Rust not found - installing (stable)..."
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        try {
+            & winget install --id Rustlang.Rustup -e --silent --accept-source-agreements --accept-package-agreements
+        } catch { Write-WarnMsg "winget install failed; falling back to rustup-init." }
+    }
+    Add-CargoToPath
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
         $installer = Join-Path $env:TEMP "rustup-init.exe"
         Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $installer
         & $installer -y --default-toolchain stable
         Remove-Item $installer -ErrorAction SilentlyContinue
-        $env:PATH = $cargoBin + ";" + $env:PATH
-        $hasRustup = $null -ne (Get-Command rustup -ErrorAction SilentlyContinue)
+        Add-CargoToPath
     }
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        Die "Rust installation failed. Install from https://rustup.rs and re-run."
+    }
+    Write-Ok (cmd /c "cargo --version 2>nul")
+}
 
-    # Verify cargo actually works (not just that the command exists)
-    $cargoVer = cmd /c "cargo --version 2>nul"
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($cargoVer)) {
-        Write-WarnMsg "cargo is broken or missing - repairing toolchain..."
-        & rustup default stable 2>$null
-        if ($LASTEXITCODE -ne 0) { & rustup toolchain install stable }
-        $cargoVer = cmd /c "cargo --version 2>nul"
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($cargoVer)) {
-            Write-ErrMsg "Could not repair Rust toolchain. Run: rustup default stable"
-            exit 1
+function Test-Cmake {
+    if ($Features -eq "full" -or $Features -like "*boring-impersonate*") {
+        if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+            Write-WarnMsg "'$Features' needs cmake (BoringSSL). Installing via winget..."
+            if (Get-Command winget -ErrorAction SilentlyContinue) {
+                & winget install --id Kitware.CMake -e --silent --accept-source-agreements --accept-package-agreements
+                $env:PATH = "$env:PATH;C:\Program Files\CMake\bin"
+            }
+            if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+                Die "cmake not found. Install it (winget install Kitware.CMake) or use -Features '' for the default build."
+            }
         }
-    }
-    Write-Ok "cargo  $cargoVer"
-
-    # Verify rustc works
-    $rustcVer = cmd /c "rustc --version 2>nul"
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($rustcVer)) {
-        Write-WarnMsg "rustc is broken - repairing toolchain..."
-        & rustup default stable 2>$null
-        if ($LASTEXITCODE -ne 0) { & rustup toolchain install stable }
-        $rustcVer = cmd /c "rustc --version 2>nul"
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($rustcVer)) {
-            Write-ErrMsg "Could not repair rustc. Run: rustup default stable"
-            exit 1
-        }
-    }
-    Write-Ok "rustc  $rustcVer"
-
-    # Version check - require 1.88+
-    $current = $rustcVer -replace '.*?(\d+\.\d+\.\d+).*','$1'
-    $needed  = "1.88.0"
-    if ([version]$current -lt [version]$needed) {
-        Write-ErrMsg "Rust $needed+ required, found $current - run: rustup update"
-        exit 1
-    }
-    Write-Ok "Rust $current meets minimum ($needed)"
-
-    # Check for cmake when full feature is requested (needed for BoringSSL)
-    if ($Features -eq "full") {
-        $hasCmake = $null -ne (Get-Command cmake -ErrorAction SilentlyContinue)
-        if (-not $hasCmake) {
-            Write-WarnMsg "'full' feature requires cmake (for BoringSSL). Not found."
-            Write-Host "  Either install cmake:  winget install cmake"
-            Write-Host "  Or build without it:   .\setup.ps1 -Features ''"
-            Write-ErrMsg "cmake not found - cannot build with 'full' feature"
-            exit 1
-        }
-        Write-Ok "cmake $(cmd /c 'cmake --version 2>nul' | Select-Object -First 1)"
+        Write-Ok "cmake present"
     }
 }
 
-# --- Build ---
-
+# --- Build / test ---
 function Invoke-Build {
-    if ($SkipBuild) {
-        Write-WarnMsg "Skipping build (-SkipBuild)"
-        return
-    }
-    $featuresLabel = if ([string]::IsNullOrWhiteSpace($Features)) { "none" } else { $Features }
-    Write-Step "Building hydra-client (features: $featuresLabel, release)..."
-    $cargoArgs = @("build", "--release", "-p", "hydra-client")
-    if (-not [string]::IsNullOrWhiteSpace($Features)) {
-        $cargoArgs += @("--features", $Features)
-    }
-    if ($VerboseOutput) {
-        & cargo @cargoArgs
-    } else {
-        $out = & cargo @cargoArgs 2>&1
-        $out | Select-Object -Last 5 | ForEach-Object { Write-Host $_ }
-    }
-    if ($LASTEXITCODE -ne 0) {
-        Write-ErrMsg "Build failed (exit $LASTEXITCODE)"
-        exit $LASTEXITCODE
-    }
-    Write-Ok "Build complete"
+    if ($SkipBuild) { Write-WarnMsg "Skipping build (-SkipBuild)"; return }
+    $lbl = if ([string]::IsNullOrWhiteSpace($Features)) { "none" } else { $Features }
+    Write-Step "Building hydra.exe (features: $lbl, release)..."
+    $cargoArgs = @("build","--release","-p","hydra-cli")
+    if (-not [string]::IsNullOrWhiteSpace($Features)) { $cargoArgs += @("--features",$Features) }
+    & cargo @cargoArgs
+    if ($LASTEXITCODE -ne 0) { Die "Build failed (exit $LASTEXITCODE)" }
+    Write-Ok "Build complete -> target\release\hydra.exe"
 }
-
-# --- Test ---
 
 function Invoke-Test {
-    if ($SkipTests) {
-        Write-WarnMsg "Skipping tests (-SkipTests)"
-        return
-    }
-
-    Write-Step "Running test suite..."
-    & cargo test --workspace 2>&1
-    if ($LASTEXITCODE -ne 0) { Write-ErrMsg "Tests failed"; exit $LASTEXITCODE }
-    Write-Ok "All tests passed"
-
-    Write-Step "Running clippy lints..."
-    & cargo clippy --all-targets -- -D warnings 2>&1
-    if ($LASTEXITCODE -ne 0) { Write-ErrMsg "Clippy failed"; exit $LASTEXITCODE }
-    Write-Ok "Clippy clean"
-
-    Write-Step "Checking formatting..."
-    & cargo fmt --all --check 2>&1
-    if ($LASTEXITCODE -ne 0) { Write-ErrMsg "Formatting check failed"; exit $LASTEXITCODE }
-    Write-Ok "Formatting clean"
+    if ($SkipTests) { Write-WarnMsg "Skipping tests (-SkipTests)"; return }
+    Write-Step "Running workspace tests..."
+    & cargo test --workspace
+    if ($LASTEXITCODE -ne 0) { Die "Tests failed" }
+    Write-Ok "Tests passed"
 }
 
-# --- Install ---
-
-function Invoke-Install {
-    if (-not (Test-Path $InstallDir)) {
-        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    }
-
-    $src = Join-Path $RepoRoot "target\release\hydra-client.exe"
-    if (-not (Test-Path $src)) {
-        Write-ErrMsg "Binary not found: $src - run -Action Build first"
-        exit 1
-    }
-
-    $dst = Join-Path $InstallDir "hydra-client.exe"
+function Install-Bin {
+    if (-not (Test-Path $InstallDir)) { New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null }
+    $src = Join-Path $RepoRoot "target\release\hydra.exe"
+    if (-not (Test-Path $src)) { Die "Binary not found: $src - build first." }
+    $dst = Join-Path $InstallDir "hydra.exe"
     Copy-Item $src $dst -Force
-    Write-Ok "Installed hydra-client.exe -> $dst"
+    Write-Ok "Installed hydra.exe -> $dst"
+    $userPath = [Environment]::GetEnvironmentVariable("Path","User")
+    if ($userPath -notlike "*$InstallDir*") {
+        Write-WarnMsg "$InstallDir is not on your PATH. Add it permanently:"
+        Write-Host "    [Environment]::SetEnvironmentVariable('Path','$InstallDir;'+[Environment]::GetEnvironmentVariable('Path','User'),'User')"
+    }
+    return $dst
+}
 
-    # Check if InstallDir is in PATH
-    $pathDirs = $env:PATH -split ";"
-    if ($pathDirs -notcontains $InstallDir) {
-        Write-WarnMsg "$InstallDir is not in your PATH"
-        Write-Host "  Add it permanently:"
-        $cmdText = '[Environment]::SetEnvironmentVariable(''Path'', ''' + $InstallDir + ';'' + [Environment]::GetEnvironmentVariable(''Path'', ''User''), ''User'')'
-        Write-Host "    $cmdText"
+# --- Bundle handling ---
+function Convert-FromBundle {
+    param([string]$Token)
+    $t = $Token.Trim()
+    if ($t.StartsWith("hydra://")) { $t = $t.Substring(8) }
+    try {
+        $bytes = [System.Convert]::FromBase64String($t)
+        return [System.Text.Encoding]::UTF8.GetString($bytes)
+    } catch {
+        Die "Could not decode bundle (expected hydra://<base64>)."
     }
 }
 
-# --- Config ---
-
-function Invoke-Config {
-    if ($NoConfig) {
-        Write-WarnMsg "Skipping config (-NoConfig)"
-        return
-    }
-
-    $targetConfig = Join-Path $ConfigDir "hydra.toml"
-    $sampleConfig = Join-Path $RepoRoot "crates\pool-engine\fixtures\hydra.toml"
-
-    if (Test-Path $targetConfig) {
-        Write-WarnMsg "Config already exists at $targetConfig - skipping"
-        return
-    }
-
-    if (-not (Test-Path $ConfigDir)) {
-        New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
-    }
-
-    if (-not (Test-Path $sampleConfig)) {
-        Write-ErrMsg "Sample config not found: $sampleConfig"
-        exit 1
-    }
-
-    Copy-Item $sampleConfig $targetConfig
-    Write-Ok "Sample config installed -> $targetConfig"
-    Write-WarnMsg "Edit $targetConfig with real master_secret + server_salt before using!"
+function New-ClientConfigFromBundle {
+    param([string]$Token, [string]$CfgPath)
+    $toml = Convert-FromBundle -Token $Token
+    # Defensive: never keep a server private key in a client config.
+    $toml = ($toml -split "`n" | Where-Object { $_ -notmatch '^\s*private_key' }) -join "`n"
+    Set-Content -Path $CfgPath -Value $toml -Encoding UTF8
+    Write-Ok "Wrote client config from bundle -> $CfgPath"
 }
 
-# --- Uninstall ---
+function New-ClientConfigManual {
+    param([string]$HydraBin, [string]$CfgPath)
+    $addr   = Read-Host "  Server IP or domain"
+    $port   = Read-Host "  REALITY port [443]"; if ([string]::IsNullOrWhiteSpace($port)) { $port = "443" }
+    $secret = Read-Host "  master_secret (base64:... or raw)"
+    $salt   = Read-Host "  server_salt (base64:... or raw)"
+    $pbk    = Read-Host "  public_key / pbk (base64)"
+    $sid    = Read-Host "  short_id (hex)"
+    if (-not $addr -or -not $secret -or -not $salt -or -not $pbk) {
+        Die "Missing required value (address, secret, salt, and pbk are all required)."
+    }
+    if ($secret -notlike "base64:*") { $secret = "base64:$secret" }
+    if ($salt   -notlike "base64:*") { $salt   = "base64:$salt" }
+    if ($pbk    -like    "base64:*") { $pbk    = $pbk.Substring(7) }
 
-function Invoke-Uninstall {
-    Write-Step "Uninstalling REALITY-Hydra client..."
-    $removed = 0
+    # Start from the default pool, then rewrite the shared fields.
+    $tmp = [System.IO.Path]::GetTempFileName()
+    & $HydraBin init --output $tmp --dest "$addr`:$port" --force | Out-Null
+    $lines = Get-Content $tmp
+    $out = foreach ($ln in $lines) {
+        if     ($ln -match '^master_secret\s*=')     { "master_secret = `"$secret`"" }
+        elseif ($ln -match '^server_salt\s*=')        { "server_salt   = `"$salt`"" }
+        elseif ($ln -match '^\s*public_key\s*=')      { "public_key  = `"$pbk`"" }
+        elseif ($ln -match '^\s*short_ids\s*=')       { "short_ids   = [`"$sid`"]" }
+        elseif ($ln -match '^\s*private_key\s*=')     { continue }
+        else { $ln }
+    }
+    Set-Content -Path $CfgPath -Value ($out -join "`n") -Encoding UTF8
+    Remove-Item $tmp -ErrorAction SilentlyContinue
+    Write-Ok "Wrote client config -> $CfgPath"
+    Write-WarnMsg "Manual mode uses the DEFAULT SNI pool; it must match the server's."
+    Write-WarnMsg "If the server customized its pool, use the hydra:// bundle instead."
+}
 
-    $binPath = Join-Path $InstallDir "hydra-client.exe"
-    if (Test-Path $binPath) {
-        Remove-Item $binPath -Force
-        Write-Ok "Removed $binPath"
-        $removed++
+# --- Client install ---
+function Install-Client {
+    Write-Banner
+    Test-WindowsVersion
+    Install-Rust
+    Test-Cmake
+    Invoke-Build
+    Invoke-Test
+    $hydra = Install-Bin
+
+    if (-not (Test-Path $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
+    $cfg = Join-Path $ConfigDir "hydra.toml"
+
+    if (Test-Path $cfg) {
+        Write-WarnMsg "Client config already exists at $cfg."
+        $a = Read-Host "  Overwrite it? [y/N]"
+        if ($a -notmatch '^[Yy]') { Show-ClientSummary $hydra $cfg; return }
     }
 
-    $configPath = Join-Path $ConfigDir "hydra.toml"
-    if (Test-Path $configPath) {
-        Remove-Item $configPath -Force
-        Write-Ok "Removed $configPath"
-        $removed++
-    }
-
-    if ($removed -eq 0) {
-        Write-WarnMsg "Nothing to uninstall"
+    if ($Bundle) {
+        New-ClientConfigFromBundle -Token $Bundle -CfgPath $cfg
     } else {
-        Write-Ok "Uninstall complete ($removed items removed)"
+        Write-Host ""
+        Write-Host "How do you want to configure this client?" -ForegroundColor White
+        Write-Host "   1) Paste the hydra:// bundle from the server   (recommended)"
+        Write-Host "   2) Enter the values manually"
+        $choice = Read-Host "  Choice [1]"
+        if ($choice -eq "2") {
+            New-ClientConfigManual -HydraBin $hydra -CfgPath $cfg
+        } else {
+            $b = Read-Host "  Paste bundle"
+            New-ClientConfigFromBundle -Token $b -CfgPath $cfg
+        }
     }
+
+    # Optional: run on logon via a Scheduled Task.
+    $a = Read-Host "  Run the client automatically on logon (Scheduled Task)? [y/N]"
+    if ($a -match '^[Yy]') {
+        & $hydra service install --role client --config $cfg --listen $Listen
+        if ($LASTEXITCODE -eq 0) { Write-Ok "Scheduled task installed (hydra-client)" }
+        else { Write-WarnMsg "Task install failed (try an elevated PowerShell)." }
+    }
+
+    Show-ClientSummary $hydra $cfg
 }
 
-# --- Status ---
+function Show-ClientSummary {
+    param([string]$Hydra, [string]$Cfg)
+    Write-Host ""
+    Write-Host "============================================================" -ForegroundColor Cyan
+    Write-Host "  Client installed." -ForegroundColor Green
+    Write-Host "============================================================" -ForegroundColor Cyan
+    Write-Host "  Config: $Cfg"
+    Write-Host "  Run:    `"$Hydra`" serve -c `"$Cfg`" --listen $Listen"
+    Write-Host "  Point your app's SOCKS5 proxy at $Listen."
+    Write-Host "  For real DNS + BoringSSL, rebuild with -Features full."
+    Write-Host ""
+}
 
+# --- Status / Uninstall ---
 function Show-Status {
+    Write-Banner
+    Test-WindowsVersion
+    $bin = Join-Path $InstallDir "hydra.exe"
+    Write-Host "`nBinary:" -ForegroundColor White
+    if (Test-Path $bin) { Write-Ok "$bin" } else { Write-ErrMsg "$bin (not installed)" }
+    $cfg = Join-Path $ConfigDir "hydra.toml"
+    Write-Host "`nConfig:" -ForegroundColor White
+    if (Test-Path $cfg) { Write-Ok "$cfg" } else { Write-ErrMsg "$cfg (not installed)" }
+    Write-Host "`nToolchain:" -ForegroundColor White
+    if (Get-Command cargo -ErrorAction SilentlyContinue) { Write-Ok (cmd /c "rustc --version 2>nul") }
+    else { Write-ErrMsg "Rust not installed" }
+    Write-Host "`nScheduled task:" -ForegroundColor White
+    $t = schtasks /Query /TN "hydra-client" 2>$null
+    if ($LASTEXITCODE -eq 0) { Write-Ok "hydra-client task registered" } else { Write-WarnMsg "no hydra-client task" }
     Write-Host ""
-    Write-Host "REALITY-Hydra Client Status" -ForegroundColor Cyan
-    Write-Host "----------------------------------------" -ForegroundColor Cyan
+}
 
-    Write-Host ""
-    Write-Host "Binary:" -ForegroundColor White
-    $binPath = Join-Path $InstallDir "hydra-client.exe"
-    if (Test-Path $binPath) {
-        $size = (Get-Item $binPath).Length / 1MB
-        $sizeStr = "{0:N1}" -f $size
-        Write-Ok "$binPath ($sizeStr MB)"
-    } else {
-        Write-ErrMsg "$binPath (not installed)"
+function Uninstall-Client {
+    Write-Banner
+    Write-Step "Uninstalling REALITY-Hydra client..."
+    schtasks /Delete /F /TN "hydra-client" 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { Write-Ok "Removed scheduled task" }
+    $bin = Join-Path $InstallDir "hydra.exe"
+    if (Test-Path $bin) { Remove-Item $bin -Force; Write-Ok "Removed $bin" }
+    $cfg = Join-Path $ConfigDir "hydra.toml"
+    if (Test-Path $cfg) {
+        $a = Read-Host "  Remove config $cfg? [y/N]"
+        if ($a -match '^[Yy]') { Remove-Item $cfg -Force; Write-Ok "Removed $cfg" }
+        else { Write-Step "Kept $cfg" }
     }
+    Write-Ok "Uninstall complete"
+}
 
+# --- Menu ---
+function Show-Menu {
+    Write-Banner
+    Test-WindowsVersion
     Write-Host ""
-    Write-Host "Config:" -ForegroundColor White
-    $configPath = Join-Path $ConfigDir "hydra.toml"
-    if (Test-Path $configPath) {
-        Write-Ok "$configPath"
-    } else {
-        Write-ErrMsg "$configPath (not installed)"
+    Write-Host "  1) Install client   (paste the server's hydra:// bundle)"
+    Write-Host "  2) Status"
+    Write-Host "  3) Uninstall"
+    Write-Host "  0) Exit"
+    Write-Host ""
+    $c = Read-Host "  Select [0-3]"
+    switch ($c) {
+        "1" { Install-Client }
+        "2" { Show-Status }
+        "3" { Uninstall-Client }
+        default { exit 0 }
     }
-
-    Write-Host ""
-    Write-Host "Rust toolchain:" -ForegroundColor White
-    $hasCargo = $null -ne (Get-Command cargo -ErrorAction SilentlyContinue)
-    if ($hasCargo) {
-        $rv = cmd /c "rustc --version 2>nul"
-        $cv = cmd /c "cargo --version 2>nul"
-        Write-Ok $rv
-        Write-Ok $cv
-    } else {
-        Write-ErrMsg "Not installed"
-    }
-
-    Write-Host ""
-    Write-Host "Build artifacts:" -ForegroundColor White
-    $releaseBin = Join-Path $RepoRoot "target\release\hydra-client.exe"
-    if (Test-Path $releaseBin) {
-        $size = (Get-Item $releaseBin).Length / 1MB
-        $sizeStr = "{0:N1}" -f $size
-        Write-Ok "target\release\hydra-client.exe ($sizeStr MB)"
-    } else {
-        Write-WarnMsg "target\release\hydra-client.exe (not built)"
-    }
-
-    Write-Host ""
 }
 
 # --- Main ---
-
-Write-Host "===========================================================" -ForegroundColor Cyan
-Write-Host "  REALITY-Hydra Windows Client Setup  v$Version" -ForegroundColor Cyan
-Write-Host "===========================================================" -ForegroundColor Cyan
-Write-Host ""
-
-# Default to full pipeline
-if (-not $Action -or $Action.Count -eq 0) {
-    $Action = @("Check","Build","Test","Install","Config")
-}
-
-Set-Location $RepoRoot
-
-$didInstall = $false
-foreach ($a in $Action) {
-    switch ($a) {
-        "Check"     { Test-RustToolchain }
-        "Build"     { Invoke-Build }
-        "Test"      { Invoke-Test }
-        "Install"   { Invoke-Install; $didInstall = $true }
-        "Config"    { Invoke-Config }
-        "Uninstall" { Invoke-Uninstall; Write-Host ""; return }
-        "Status"    { Show-Status; return }
-    }
-    Write-Host ""
-}
-
-if ($didInstall) {
-    Write-Host "===========================================================" -ForegroundColor Cyan
-    Write-Host "  REALITY-Hydra client installed successfully!" -ForegroundColor Green
-    Write-Host "===========================================================" -ForegroundColor Cyan
-    Write-Host ""
-
-    $binMsg = "  Binary:  " + (Join-Path $InstallDir "hydra-client.exe")
-    $cfgMsg = "  Config:  " + (Join-Path $ConfigDir "hydra.toml")
-    Write-Host $binMsg
-    Write-Host $cfgMsg
-    Write-Host ""
-    Write-Host "  Run the client:" -ForegroundColor White
-    $runCmd = "    hydra-client.exe -c " + (Join-Path $ConfigDir "hydra.toml") + " --listen 127.0.0.1:1080"
-    Write-Host $runCmd
-    Write-Host ""
-    Write-Host "  With real DNS + BoringSSL impersonation:" -ForegroundColor White
-    $runFull = "    hydra-client.exe --features full -c " + (Join-Path $ConfigDir "hydra.toml") + " --listen 127.0.0.1:1080"
-    Write-Host $runFull
-    Write-Host ""
-} else {
-    Write-Host "===========================================================" -ForegroundColor Cyan
-    Write-Host "  Done." -ForegroundColor Green
-    Write-Host "===========================================================" -ForegroundColor Cyan
-    Write-Host ""
+switch ($Command) {
+    "client"    { Install-Client }
+    "status"    { Show-Status }
+    "uninstall" { Uninstall-Client }
+    default     { Show-Menu }
 }

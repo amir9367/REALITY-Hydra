@@ -1,0 +1,15 @@
+[package]
+name = "xtask"
+description = "REALITY-Hydra developer task runner: the cross-platform source of truth for check/build/test/install/config, delegated to by setup.sh and setup.ps1."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }

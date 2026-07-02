@@ -13,4 +13,23 @@ pub enum CliError {
     /// values we build, but surfaced rather than panicked on).
     #[error("failed to serialize output: {0}")]
     Serialize(#[from] serde_json::Error),
+
+    /// A filesystem operation failed (reading/writing config or unit files).
+    #[error("{path}: {source}")]
+    Io {
+        path: String,
+        source: std::io::Error,
+    },
+
+    /// `init` refused to overwrite an existing file without `--force`.
+    #[error("{0} already exists (use --force to overwrite)")]
+    AlreadyExists(String),
+
+    /// The SOCKS5 client returned an error while serving.
+    #[error(transparent)]
+    Client(#[from] hydra_client::ClientError),
+
+    /// Service (systemd / scheduled task) management failed.
+    #[error("service: {0}")]
+    Service(String),
 }

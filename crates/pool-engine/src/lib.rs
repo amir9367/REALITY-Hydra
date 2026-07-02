@@ -55,7 +55,7 @@ mod kdf;
 mod sampler;
 mod select;
 
-pub use config::HydraConfig;
+pub use config::{HydraConfig, RealitySettings, REALITY_KEY_LEN};
 pub use entry::{ActivePool, MasterList, PoolEntry};
 pub use epoch::{Epoch, current_epoch, epoch_at, epoch_window};
 pub use error::PoolError;

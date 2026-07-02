@@ -1,23 +1,54 @@
-//! The `hydra` binary: a thin clap shell over the `hydra_cli` library.
+//! The `hydra` binary: a clap shell over the `hydra_cli` library.
 //!
-//! Typical server-side use (regenerate `serverNames` for the current epoch and
-//! reload Xray):
+//! One tool for the whole REALITY-Hydra lifecycle:
 //!
 //! ```text
-//! hydra --config /etc/hydra/hydra.toml --format json > server-names.json
-//! hydra --config /etc/hydra/hydra.toml --format xray > reality-inbound.json
+//! hydra keygen                                  # X25519 keypair (xray x25519)
+//! hydra init -o hydra.toml                      # scaffold a full config
+//! hydra server-names -c hydra.toml --format xray  # epoch serverNames (server)
+//! hydra serve -c hydra.toml --listen :1080        # SOCKS5 client
+//! hydra service install --role client -c hydra.toml
 //! ```
+//!
+//! Everything that produces output lives in the library so it stays testable
+//! without spawning a process.
 
 use std::process::ExitCode;
 
-use clap::{Parser, ValueEnum};
-use hydra_cli::{OutputFormat, render, resolve_epoch, server_names};
+use clap::{Parser, Subcommand, ValueEnum};
+use hydra_cli::init::InitArgs;
+use hydra_cli::keygen::KeygenArgs;
+use hydra_cli::serve::ServeArgs;
+use hydra_cli::service::ServiceArgs;
+use hydra_cli::{OutputFormat, render, resolve_epoch, server_names, CliError};
 use pool_engine::HydraConfig;
 
-/// Derive a REALITY server's accepted `serverNames` for an epoch from hydra.toml.
+/// REALITY-Hydra: rotating SNI-pool transport tooling.
 #[derive(Parser, Debug)]
 #[command(name = "hydra", version, about)]
 struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Generate a REALITY X25519 keypair (like `xray x25519`).
+    Keygen(KeygenArgs),
+    /// Scaffold a complete hydra.toml with fresh secrets and keys.
+    Init(InitArgs),
+    /// Derive the accepted serverNames for an epoch (server side).
+    #[command(name = "server-names", visible_alias = "names")]
+    ServerNames(ServerNamesArgs),
+    /// Run the SOCKS5 client proxy.
+    Serve(ServeArgs),
+    /// Install/print an OS service (systemd unit or Windows task).
+    Service(ServiceArgs),
+}
+
+/// The former top-level behaviour, now a subcommand.
+#[derive(clap::Args, Debug)]
+struct ServerNamesArgs {
     /// Path to the Hydra config (TOML). See REALITY.md §11.
     #[arg(short, long, value_name = "PATH")]
     config: String,
@@ -35,7 +66,6 @@ struct Cli {
     epoch: Option<u64>,
 
     /// Emit only the exact single-epoch subset, not the ±1 acceptance window.
-    /// A server should normally keep the window (the default).
     #[arg(long)]
     single: bool,
 }
@@ -64,10 +94,11 @@ impl From<Format> for OutputFormat {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(&cli) {
-        Ok(out) => {
+        Ok(Some(out)) => {
             println!("{out}");
             ExitCode::SUCCESS
         }
+        Ok(None) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("hydra: {e}");
             ExitCode::FAILURE
@@ -75,9 +106,24 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: &Cli) -> Result<String, hydra_cli::CliError> {
-    let cfg = HydraConfig::from_file(&cli.config)?;
-    let epoch = resolve_epoch(&cfg, cli.at, cli.epoch);
-    let pool = server_names(&cfg, epoch, /* window = */ !cli.single);
-    render(&cfg, &pool, epoch, cli.format.into())
+/// Dispatch a subcommand. `Ok(Some(s))` prints `s`; `Ok(None)` prints nothing
+/// (the subcommand handled its own output, e.g. `serve`).
+fn run(cli: &Cli) -> Result<Option<String>, CliError> {
+    match &cli.command {
+        Command::Keygen(args) => Ok(Some(hydra_cli::keygen::run(args)?)),
+        Command::Init(args) => Ok(Some(hydra_cli::init::run(args)?)),
+        Command::ServerNames(args) => Ok(Some(server_names_output(args)?)),
+        Command::Serve(args) => {
+            hydra_cli::serve::run(args)?;
+            Ok(None)
+        }
+        Command::Service(args) => Ok(Some(hydra_cli::service::run(args)?)),
+    }
+}
+
+fn server_names_output(args: &ServerNamesArgs) -> Result<String, CliError> {
+    let cfg = HydraConfig::from_file(&args.config)?;
+    let epoch = resolve_epoch(&cfg, args.at, args.epoch);
+    let pool = server_names(&cfg, epoch, /* window = */ !args.single);
+    render(&cfg, &pool, epoch, args.format.into())
 }

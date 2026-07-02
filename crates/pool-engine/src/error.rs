@@ -49,4 +49,17 @@ pub enum PoolError {
 
     #[error("failed to parse TOML: {0}")]
     Toml(#[from] toml::de::Error),
+
+    #[error("reality key {field} must be {expected} bytes, got {actual}")]
+    BadRealityKeyLen {
+        field: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+
+    #[error("invalid hex in reality short_id {index}: {reason}")]
+    BadShortIdHex { index: usize, reason: String },
+
+    #[error("reality short_id {index} is {actual} bytes; the REALITY limit is 32")]
+    ShortIdTooLong { index: usize, actual: usize },
 }

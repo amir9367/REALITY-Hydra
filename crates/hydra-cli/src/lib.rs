@@ -40,6 +40,11 @@ mod epoch;
 mod error;
 mod render;
 
+pub mod init;
+pub mod keygen;
+pub mod serve;
+pub mod service;
+
 pub use epoch::{resolve_epoch, server_names};
 pub use error::CliError;
 pub use render::{OutputFormat, render, render_json, render_lines, render_xray};

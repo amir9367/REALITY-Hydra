@@ -46,33 +46,6 @@ fn run(cli: &Cli) -> Result<(), ClientError> {
 
     rt.block_on(async move {
         let pipeline = Pipeline::mock(config);
-        serve(&cli.listen, pipeline).await
+        pipeline.serve(&cli.listen).await
     })
-}
-
-/// Accept SOCKS5 connections on `addr` and hand them to the pipeline.
-async fn serve(
-    addr: &str,
-    pipeline: Pipeline<dns_warmer::MockResolver>,
-) -> Result<(), ClientError> {
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| ClientError::Bind {
-            addr: addr.to_string(),
-            message: e.to_string(),
-        })?;
-
-    eprintln!("hydra-client: listening on {addr}");
-
-    loop {
-        let (stream, peer) = listener.accept().await?;
-        eprintln!("hydra-client: connection from {peer}");
-
-        let pipeline = pipeline.clone();
-        tokio::spawn(async move {
-            if let Err(e) = pipeline.handle_connection(stream).await {
-                eprintln!("hydra-client: connection error: {e}");
-            }
-        });
-    }
 }

@@ -19,8 +19,25 @@ path = "src/main.rs"
 [dependencies]
 # The keyed epoch pool: this crate is pure glue over it.
 pool-engine = { path = "../pool-engine" }
+# REALITY key material for `keygen` / `init` (X25519 keypair, OsRng).
+reality-tls = { path = "../reality-tls" }
+# The SOCKS5 client, exposed via `hydra serve`.
+hydra-client = { path = "../hydra-client" }
+# Resolver type used by the mock client pipeline in `hydra serve`.
+dns-warmer = { path = "../dns-warmer" }
 # CLI parsing for the `hydra` binary.
 clap = { workspace = true }
 # JSON output (a serverNames array and the Xray inbound snippet).
 serde_json = { workspace = true }
+# base64 for emitting generated secrets/keys into hydra.toml.
+base64 = { workspace = true }
+# Async runtime for `hydra serve`.
+tokio = { workspace = true }
 thiserror.workspace = true
+
+[features]
+# Forwarded to hydra-client so `hydra serve` can use the real client stack.
+default = []
+live-dns = ["hydra-client/live-dns"]
+boring-impersonate = ["hydra-client/boring-impersonate"]
+full = ["live-dns", "boring-impersonate"]
