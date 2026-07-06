@@ -1,0 +1,19 @@
+[package]
+name = "tunnel-proto"
+description = "REALITY-Hydra self-tunnel wire format: the authenticated CONNECT header the client sends the exit node (pure logic, no network)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Per-request authentication: HMAC-SHA256(master_secret, header bytes). The
+# `verify_slice` path is constant-time, which is why we reuse the same crates as
+# the pool engine rather than hand-rolling a compare.
+hmac.workspace = true
+sha2.workspace = true
+# Ergonomic error enum, matching the rest of the workspace.
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

@@ -45,7 +45,9 @@ mod error;
 mod pipeline;
 pub mod server_setup;
 mod socks5;
+mod tunnel;
 
 pub use error::ClientError;
 pub use pipeline::Pipeline;
 pub use socks5::Socks5Addr;
+pub use tunnel::TunnelClient;

@@ -223,12 +223,14 @@ function New-ClientConfigManual {
     $salt   = Read-Host "  server_salt (base64:... or raw)"
     $pbk    = Read-Host "  public_key / pbk (base64)"
     $sid    = Read-Host "  short_id (hex)"
+    $pin    = Read-Host "  cert_pin from 'hydra server' (base64, blank = no pinning / Xray path)"
     if (-not $addr -or -not $secret -or -not $salt -or -not $pbk) {
         Die "Missing required value (address, secret, salt, and pbk are all required)."
     }
     if ($secret -notlike "base64:*") { $secret = "base64:$secret" }
     if ($salt   -notlike "base64:*") { $salt   = "base64:$salt" }
     if ($pbk    -like    "base64:*") { $pbk    = $pbk.Substring(7) }
+    if ($pin -and $pin -notlike "base64:*") { $pin = "base64:$pin" }
 
     # Start from the default pool, then rewrite the shared fields.
     $tmp = [System.IO.Path]::GetTempFileName()
@@ -240,11 +242,16 @@ function New-ClientConfigManual {
         elseif ($ln -match '^\s*public_key\s*=')      { "public_key  = `"$pbk`"" }
         elseif ($ln -match '^\s*short_ids\s*=')       { "short_ids   = [`"$sid`"]" }
         elseif ($ln -match '^\s*private_key\s*=')     { continue }
+        # For the self-tunnel, dial the VPS directly and (optionally) pin its cert.
+        elseif ($ln -match '^#\s*server_addr\s*=')    { "server_addr = `"$addr`:$port`"" }
+        elseif ($ln -match '^#\s*cert_pin\s*=')       { if ($pin) { "cert_pin    = `"$pin`"" } else { $ln } }
         else { $ln }
     }
     Set-Content -Path $CfgPath -Value ($out -join "`n") -Encoding UTF8
     Remove-Item $tmp -ErrorAction SilentlyContinue
     Write-Ok "Wrote client config -> $CfgPath"
+    if ($pin) { Write-Ok "Self-tunnel: dialing $addr`:$port with a pinned certificate." }
+    else { Write-WarnMsg "No cert_pin given: self-tunnel will accept any cert (or use the Xray path)." }
     Write-WarnMsg "Manual mode uses the DEFAULT SNI pool; it must match the server's."
     Write-WarnMsg "If the server customized its pool, use the hydra:// bundle instead."
 }

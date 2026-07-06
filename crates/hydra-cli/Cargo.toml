@@ -23,6 +23,10 @@ pool-engine = { path = "../pool-engine" }
 reality-tls = { path = "../reality-tls" }
 # The SOCKS5 client, exposed via `hydra serve`.
 hydra-client = { path = "../hydra-client" }
+# The self-tunnel exit node, exposed via `hydra server`.
+hydra-server = { path = "../hydra-server" }
+# Shared tunnel constants (default clock-skew window) for the server args.
+tunnel-proto = { path = "../tunnel-proto" }
 # Resolver type used by the mock client pipeline in `hydra serve`.
 dns-warmer = { path = "../dns-warmer" }
 # CLI parsing for the `hydra` binary.

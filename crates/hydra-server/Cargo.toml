@@ -1,0 +1,29 @@
+[package]
+name = "hydra-server"
+description = "REALITY-Hydra self-tunnel exit node: a TLS listener that authenticates the tunnel header and relays to the real destination. Linux VPS side; no Xray."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The authenticated CONNECT header shared with the client.
+tunnel-proto = { path = "../tunnel-proto" }
+# Reuse the master-secret loading + validation from the config layer.
+pool-engine = { path = "../pool-engine" }
+# Async runtime + TCP for the accept loop and byte relay.
+tokio.workspace = true
+# TLS termination (server side), ring provider — no cmake toolchain.
+tokio-rustls.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+# Generate / load the self-signed leaf presented to clients.
+rcgen.workspace = true
+# SHA-256 of the cert DER → the pin printed for the client bundle.
+sha2.workspace = true
+base64.workspace = true
+# Ergonomic error enum.
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }

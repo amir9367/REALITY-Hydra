@@ -74,6 +74,15 @@ pub struct HydraConfig {
     pub coherence_cidrs: Vec<String>,
     /// REALITY handshake keys (optional `[reality]` table).
     pub reality: Option<RealitySettings>,
+    /// Self-tunnel exit-node address (`host:port`) the client dials, e.g. the
+    /// VPS running `hydra server`. Distinct from [`dest`](Self::dest), which is
+    /// the borrowed CDN edge for the (Xray) REALITY path. When set, the client
+    /// pipeline opens its TLS tunnel here instead of to `dest`.
+    pub server_addr: Option<String>,
+    /// SHA-256 of the exit node's TLS certificate (DER), used to pin the
+    /// self-signed cert the server prints on first run. `None` disables pinning
+    /// (accept any cert — testing only).
+    pub cert_pin: Option<[u8; 32]>,
 }
 
 impl HydraConfig {
@@ -118,6 +127,10 @@ struct RawConfig {
     pool: Vec<PoolEntry>,
     #[serde(default)]
     reality: Option<RawReality>,
+    #[serde(default)]
+    server_addr: Option<String>,
+    #[serde(default)]
+    cert_pin: Option<String>,
 }
 
 /// On-disk shape of the optional `[reality]` table.
@@ -195,6 +208,22 @@ impl RawConfig {
 
         let reality = self.reality.map(RawReality::into_settings).transpose()?;
 
+        // Optional cert pin: 32 raw bytes, base64-encoded (with or without the
+        // `base64:` prefix), matching how the other keys are written.
+        let cert_pin = match self.cert_pin {
+            Some(ref s) => {
+                let bytes = decode_b64("cert_pin", s)?;
+                let pin: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+                    PoolError::BadCertPinLen {
+                        expected: 32,
+                        actual: bytes.len(),
+                    }
+                })?;
+                Some(pin)
+            }
+            None => None,
+        };
+
         Ok(HydraConfig {
             master_secret,
             server_salt,
@@ -204,6 +233,8 @@ impl RawConfig {
             dest: self.dest,
             coherence_cidrs: self.coherence_cidrs,
             reality,
+            server_addr: self.server_addr,
+            cert_pin,
         })
     }
 }

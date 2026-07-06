@@ -20,9 +20,36 @@ use pool_engine::{ActivePool, Epoch, HydraConfig, Selector, accepted_pool_window
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
+use tunnel_proto::{Host, Target};
 
 use crate::error::ClientError;
-use crate::socks5;
+use crate::socks5::{self, Socks5Addr};
+use crate::tunnel::TunnelClient;
+
+/// Build the exit-node dialer from config, or `None` if it can't be built.
+///
+/// Prefers `server_addr`; falls back to `dest` so the existing manual-install
+/// path (which writes the server into `dest`) keeps working. A TLS-build failure
+/// is logged and yields `None` rather than aborting startup.
+fn build_tunnel(config: &HydraConfig) -> Option<Arc<TunnelClient>> {
+    let addr = config.server_addr.clone().or_else(|| config.dest.clone())?;
+    match TunnelClient::new(addr, config.cert_pin, config.master_secret().to_vec()) {
+        Ok(t) => Some(Arc::new(t)),
+        Err(e) => {
+            eprintln!("hydra-client: TLS setup failed, tunnel disabled: {e}");
+            None
+        }
+    }
+}
+
+/// Map a parsed SOCKS5 address onto the tunnel wire target.
+fn socks_to_target(addr: &Socks5Addr) -> Target {
+    match addr {
+        Socks5Addr::IPv4(a, p) => Target::new(Host::V4(*a), *p),
+        Socks5Addr::Domain(d, p) => Target::new(Host::Domain(d.clone()), *p),
+        Socks5Addr::IPv6(a, p) => Target::new(Host::V6(*a), *p),
+    }
+}
 
 /// The Hydra outbound pipeline, parameterized over a DNS resolver.
 ///
@@ -35,6 +62,10 @@ pub struct Pipeline<R: Resolver> {
     selector: Arc<tokio::sync::Mutex<Selector>>,
     pool: Arc<tokio::sync::RwLock<ActivePool>>,
     current_epoch: Arc<watch::Sender<Epoch>>,
+    /// The pinned-TLS dialer to the exit node. `None` when no `server_addr`/`dest`
+    /// is configured (or the TLS stack failed to build) — connections then fail
+    /// with a clear [`ClientError::NoServerAddr`].
+    tunnel: Option<Arc<TunnelClient>>,
 }
 
 impl Pipeline<MockResolver> {
@@ -61,12 +92,18 @@ impl<R: Resolver> Pipeline<R> {
 
         let warmer_config_clone = warmer_config;
 
+        // Build the exit-node dialer. The tunnel connects to `server_addr` if set,
+        // otherwise falls back to `dest` (the manual-install path writes the
+        // server there). Missing both, or a TLS-build failure, leaves it `None`.
+        let tunnel = build_tunnel(&config);
+
         Self {
             config: Arc::new(config),
             warmer: Arc::new(DnsWarmer::with_config(resolver, warmer_config_clone)),
             selector: Arc::new(tokio::sync::Mutex::new(Selector::new(30_000))),
             pool: Arc::new(tokio::sync::RwLock::new(pool)),
             current_epoch: Arc::new(epoch_tx),
+            tunnel,
         }
     }
 
@@ -106,75 +143,51 @@ impl<R: Resolver> Pipeline<R> {
         sel.pick(&pool, dest, now_ms)
     }
 
-    /// Handle one inbound SOCKS5 connection: perform the handshake, select an
-    /// SNI, warm DNS, open the REALITY TLS connection, and relay bytes.
+    /// Handle one inbound SOCKS5 connection: perform the handshake, open the
+    /// authenticated TLS tunnel to the exit node (which dials the real target),
+    /// and relay bytes.
+    ///
+    /// SNI selection and DNS warming remain, but only as *camouflage* for the
+    /// outer TLS ClientHello (rotating pool SNI, optional Trap-1 pre-warm). The
+    /// destination itself is carried in the tunnel header and resolved by the
+    /// exit node, so a failed warm no longer breaks the connection.
     pub async fn handle_connection(&self, mut inbound: TcpStream) -> Result<(), ClientError> {
         // 1. SOCKS5 handshake — learn what the app wants to connect to.
-        let target = socks5::handshake(&mut inbound)
+        let socks_addr = socks5::handshake(&mut inbound)
             .await
             .map_err(ClientError::Socks5)?;
-
+        let target = socks_to_target(&socks_addr);
         let dest_str = target.display();
 
         // 2. Refresh epoch if needed.
         self.maybe_refresh_epoch().await;
 
-        // 3. Pick an SNI from the active pool (sticky per destination).
-        let sni = {
-            let mut sel = self.selector.lock().await;
-            let pool = self.pool.read().await;
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            sel.pick(&pool, &dest_str, now_ms)
-                .ok_or_else(|| ClientError::Dns {
-                    sni: String::new(),
-                    message: "active pool is empty".into(),
-                })?
-        };
-
-        // 4. Warm DNS for the chosen SNI (defeats Trap 1).
+        // 3. Pick a rotating pool SNI for the outer TLS ClientHello (camouflage).
+        //    Falls back to a fixed name if the pool is somehow empty — identity is
+        //    proven by the cert pin, so the exact SNI never affects correctness.
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        self.warmer
-            .warm(&sni, now_ms)
-            .await
-            .map_err(|e| ClientError::Dns {
-                sni: sni.clone(),
-                message: e.to_string(),
-            })?;
-
-        // 5. Open a REALITY-authenticated TLS connection.
-        //    The `dest` is the CDN edge the server is fronted by.
-        let server_addr = self.config.dest.as_deref().unwrap_or("127.0.0.1:443");
-
-        // For now, without the `boring-impersonate` feature, we fall back to a
-        // plain TCP connection to demonstrate the pipeline flow. The full
-        // RealityTLS client requires BoringSSL.
-        #[cfg(feature = "boring-impersonate")]
-        let outbound = {
-            // Load the REALITY keys from the config's `[reality]` table.
-            let reality = self.config.reality.as_ref().ok_or_else(|| ClientError::Reality(
-                reality_tls::RealityError::BoringConfig(
-                    "config has no [reality] section; run `hydra init` or add public_key".into(),
-                ),
-            ))?;
-            let reality_cfg = reality_tls::RealityConfig::new(
-                reality.public_key,
-                reality.short_ids.clone(),
-                reality_tls::Fingerprint::default(),
-            )?;
-            let client = reality_tls::RealityClient::new(reality_cfg)?;
-            client.connect(server_addr, &sni).await?
+        let sni = {
+            let mut sel = self.selector.lock().await;
+            let pool = self.pool.read().await;
+            sel.pick(&pool, &dest_str, now_ms)
+                .unwrap_or_else(|| "www.microsoft.com".to_string())
         };
 
-        #[cfg(not(feature = "boring-impersonate"))]
-        let outbound = TcpStream::connect(server_addr).await?;
+        // 4. Best-effort DNS warm for the decoy SNI (Trap 1). Never fatal: the
+        //    exit node resolves the real destination, so a warm miss (e.g. the
+        //    offline MockResolver) is just skipped with a note.
+        if let Err(e) = self.warmer.warm(&sni, now_ms).await {
+            eprintln!("hydra-client: dns warm for {sni} skipped: {e}");
+        }
 
-        // 6. Relay bytes bidirectionally.
+        // 5. Open the authenticated tunnel to the exit node and relay.
+        let tunnel = self.tunnel.as_ref().ok_or(ClientError::NoServerAddr)?;
+        let outbound = tunnel.open(&sni, &target).await?;
+
+        eprintln!("hydra-client: {dest_str} via exit node (outer SNI {sni})");
         relay(inbound, outbound).await;
 
         Ok(())
@@ -234,6 +247,7 @@ impl<R: Resolver> Clone for Pipeline<R> {
             selector: self.selector.clone(),
             pool: self.pool.clone(),
             current_epoch: self.current_epoch.clone(),
+            tunnel: self.tunnel.clone(),
         }
     }
 }

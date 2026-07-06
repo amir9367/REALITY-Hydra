@@ -29,6 +29,10 @@ pub enum CliError {
     #[error(transparent)]
     Client(#[from] hydra_client::ClientError),
 
+    /// The self-tunnel exit node returned an error while serving.
+    #[error(transparent)]
+    Server(#[from] hydra_server::ServerError),
+
     /// Service (systemd / scheduled task) management failed.
     #[error("service: {0}")]
     Service(String),

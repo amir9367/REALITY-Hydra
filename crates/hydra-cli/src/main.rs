@@ -19,6 +19,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use hydra_cli::init::InitArgs;
 use hydra_cli::keygen::KeygenArgs;
 use hydra_cli::serve::ServeArgs;
+use hydra_cli::server::ServerArgs;
 use hydra_cli::service::ServiceArgs;
 use hydra_cli::{OutputFormat, render, resolve_epoch, server_names, CliError};
 use pool_engine::HydraConfig;
@@ -42,6 +43,8 @@ enum Command {
     ServerNames(ServerNamesArgs),
     /// Run the SOCKS5 client proxy.
     Serve(ServeArgs),
+    /// Run the self-tunnel exit node (Linux VPS side; no Xray).
+    Server(ServerArgs),
     /// Install/print an OS service (systemd unit or Windows task).
     Service(ServiceArgs),
 }
@@ -115,6 +118,10 @@ fn run(cli: &Cli) -> Result<Option<String>, CliError> {
         Command::ServerNames(args) => Ok(Some(server_names_output(args)?)),
         Command::Serve(args) => {
             hydra_cli::serve::run(args)?;
+            Ok(None)
+        }
+        Command::Server(args) => {
+            hydra_cli::server::run(args)?;
             Ok(None)
         }
         Command::Service(args) => Ok(Some(hydra_cli::service::run(args)?)),

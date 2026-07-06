@@ -17,6 +17,27 @@ pub enum ClientError {
     #[error("TCP bind failed on {addr}: {message}")]
     Bind { addr: String, message: String },
 
+    #[error("no exit-node address configured: set `server_addr` (or `dest`) in hydra.toml")]
+    NoServerAddr,
+
+    #[error("could not reach exit node {addr}: {source}")]
+    TunnelConnect {
+        addr: String,
+        source: std::io::Error,
+    },
+
+    #[error("TLS handshake with exit node {addr} failed: {source}")]
+    TunnelTls {
+        addr: String,
+        source: std::io::Error,
+    },
+
+    #[error("exit node refused the tunnel: {reason}")]
+    TunnelRejected { reason: String },
+
+    #[error("client TLS setup failed: {0}")]
+    Tls(String),
+
     #[error("SOCKS5 handshake failed: {0}")]
     Socks5(String),
 

@@ -62,4 +62,7 @@ pub enum PoolError {
 
     #[error("reality short_id {index} is {actual} bytes; the REALITY limit is 32")]
     ShortIdTooLong { index: usize, actual: usize },
+
+    #[error("cert_pin must be {expected} bytes (SHA-256), got {actual}")]
+    BadCertPinLen { expected: usize, actual: usize },
 }

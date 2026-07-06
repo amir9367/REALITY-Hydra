@@ -43,6 +43,7 @@ mod render;
 pub mod init;
 pub mod keygen;
 pub mod serve;
+pub mod server;
 pub mod service;
 
 pub use epoch::{resolve_epoch, server_names};

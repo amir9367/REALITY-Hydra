@@ -348,6 +348,10 @@ print_server_summary() {
     echo ""
     echo -e "  ${BOLD}Xray inbound for this epoch:${NC} $hydra server-names -c $cfg --format xray"
     echo -e "  ${BOLD}Rotate now / status:${NC}       ./setup.sh rotate   |   ./setup.sh status"
+    echo ""
+    echo -e "  ${BOLD}Self-tunnel (no Xray):${NC} run the built-in Rust exit node instead —"
+    echo -e "    ${CYAN}$hydra server -c $cfg --listen 0.0.0.0:443${NC}"
+    echo -e "    It prints a ${BOLD}cert_pin${NC}; put that + ${BOLD}server_addr = \"$dest\"${NC} in the client's hydra.toml."
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 }
 

@@ -53,7 +53,7 @@ const DEFAULT_POOL: &[(&str, f64)] = &[
     ("www.digitalocean.com", 6.0),
     ("www.medium.com", 6.0),
     ("www.discord.com", 7.0),
-    ("www.shopify.com", 6.5),
+    ("play.google.com", 6.5),
     ("www.udemy.com", 5.0),
     ("www.canva.com", 6.0),
     ("www.upwork.com", 5.0),
@@ -124,6 +124,14 @@ pub fn render_config(args: &InitArgs) -> (String, String, String) {
          dest            = \"{dest}\"\n\
          coherence_cidrs = [\n{cidrs}]\n\
          \n\
+         # ── Self-tunnel (no Xray): the Rust `hydra server` exit node ──\n\
+         # Uncomment and point at YOUR VPS to use the built-in tunnel instead of a\n\
+         # stock Xray REALITY server. `server_addr` is where the client dials; if\n\
+         # left unset the client falls back to `dest`. `cert_pin` is printed by\n\
+         # `hydra server` on first run (SHA-256 of its self-signed cert).\n\
+         # server_addr = \"YOUR.VPS.IP:443\"\n\
+         # cert_pin    = \"base64:...\"   # from `hydra server` output\n\
+         \n\
          # REALITY handshake keys (this section is what `keygen` produces).\n\
          [reality]\n\
          private_key = \"base64:{pk}\"   # SERVER only — omit on client copies\n\
@@ -165,9 +173,14 @@ pub fn run(args: &InitArgs) -> Result<String, CliError> {
          Share these client-side values (they are safe to hand to clients):\n\
          \x20 pbk (public_key): {pbk}\n\
          \x20 sid (short_id):   {sid}\n\n\
-         Next:\n\
-         \x20 server:  hydra server-names -c {out} --format xray > reality-inbound.json\n\
-         \x20 client:  hydra serve -c {out} --listen 127.0.0.1:1080",
+         Next — pick ONE server path:\n\
+         \x20 A) Self-tunnel (no Xray), the built-in Rust exit node:\n\
+         \x20    server (VPS): hydra server -c {out} --listen 0.0.0.0:443   # prints cert_pin\n\
+         \x20    client:       set server_addr + cert_pin in {out}, then\n\
+         \x20                  hydra serve -c {out} --listen 127.0.0.1:1080\n\
+         \x20 B) Stock Xray REALITY server:\n\
+         \x20    server:  hydra server-names -c {out} --format xray > reality-inbound.json\n\
+         \x20    client:  hydra serve -c {out} --listen 127.0.0.1:1080",
         args.output,
         out = args.output,
     ))

@@ -44,9 +44,6 @@ weight = 9.5
 [[pool]]
 sni    = "www.microsoft.com"
 weight = 9.0
-[[pool]]
-sni    = "www.facebook.com"
-weight = 9.0
 
 # Tier 2 — very popular (weight 6-8)
 [[pool]]
